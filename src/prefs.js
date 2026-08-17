@@ -113,7 +113,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage();
         window.add(page);
 
-        // -- Panel --
         const panelGroup = new Adw.PreferencesGroup({title: 'Panel'});
         page.add(panelGroup);
 
@@ -125,7 +124,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         panelGroup.add(showTotalRow);
 
-        // -- Tracking --
         const intervalGroup = new Adw.PreferencesGroup({title: 'Tracking'});
         page.add(intervalGroup);
 
@@ -144,10 +142,8 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         intervalGroup.add(intervalRow);
 
-        // -- App Time Limits --
         this._addLimitsGroup(page, settings, data);
 
-        // -- Data Retention --
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
         page.add(retentionGroup);
 
@@ -166,7 +162,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         retentionGroup.add(retentionRow);
 
-        // -- History (bottom) --
         const historyGroup = new Adw.PreferencesGroup({
             title: 'History',
             description: `Total screen time over the last ${HISTORY_DAYS} days.`,
