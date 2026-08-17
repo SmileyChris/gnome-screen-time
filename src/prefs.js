@@ -13,7 +13,7 @@ const CHART_HEIGHT = 110;
 // as one product.
 const BAR_RGB = [0x35 / 255, 0x84 / 255, 0xe4 / 255];
 
-// Sync read is fine here — prefs runs in its own process, not the compositor.
+// Sync read is fine here: prefs runs in its own process, not the compositor.
 function loadUsageData() {
     let file = Gio.File.new_for_path(STORE_FILE);
     if (!file.query_exists(null))
@@ -221,7 +221,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             limitRows.set(appId, row);
         };
 
-        // Listed even if the app dropped out of retained history — the limit is
+        // Listed even if the app dropped out of retained history: the limit is
         // still enforced, so it must stay visible and removable.
         let limits = getAppLimits(settings);
         for (let [appId, minutes] of Object.entries(limits))

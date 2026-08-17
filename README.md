@@ -8,13 +8,13 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 
 ## Features
 
-- **Panel indicator** — today's total next to the clock, or just the icon if you prefer.
-- **Per-app breakdown** — top five apps with usage bars and percentages; everything else folds into a collapsible "Other N apps" row, so the numbers always add up to the total.
-- **Day-by-day history** — `‹ Today ›` steps back one day at a time.
-- **App time limits** — set a daily limit per app and get a desktop notification once you cross it.
+- **Panel indicator:** today's total next to the clock, or just the icon if you prefer.
+- **Per-app breakdown:** top five apps with usage bars and percentages; everything else folds into a collapsible "Other N apps" row, so the numbers always add up to the total.
+- **Day-by-day history:** `‹ Today ›` steps back one day at a time.
+- **App time limits:** set a daily limit per app and get a desktop notification once you cross it.
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
-- **Presence-aware** — time on the lock screen, while the screen is blanked, or while suspended is never counted.
-- **Local only** — a plain JSON file on your disk. No network access, no telemetry.
+- **Presence-aware:** time on the lock screen, while the screen is blanked, or while suspended is never counted.
+- **Local only:** a plain JSON file on your disk. No network access, no telemetry.
 
 ## Requirements
 
@@ -30,8 +30,8 @@ make install
 
 Then reload GNOME Shell and enable it:
 
-- **Wayland** — log out and back in (there is no in-session reload).
-- **X11** — press `Alt`+`F2`, type `r`, press `Enter`.
+- **Wayland:** log out and back in (there is no in-session reload).
+- **X11:** press `Alt`+`F2`, type `r`, press `Enter`.
 
 ```bash
 gnome-extensions enable screen-time@gnome-screen-time
@@ -53,14 +53,14 @@ gnome-extensions prefs screen-time@gnome-screen-time
 |---|---|---|
 | Show total time in panel | On | Off shows only the icon. |
 | Max interval | 600s | Caps any single tracked stretch, so a stall can't dump hours onto one app. |
-| App time limits | — | Per-app daily limit in minutes; notifies once per day when crossed. |
+| App time limits | none | Per-app daily limit in minutes; notifies once per day when crossed. |
 | Retention days | 90 | How long history is kept. `0` keeps it forever. |
 
 ## How time is measured
 
 Time is attributed to the app owning the **focused window**, updated on every focus change and every 30 seconds. Some consequences worth knowing:
 
-- A video playing in an **unfocused** window is not counted — this measures interaction, not playback.
+- A video playing in an **unfocused** window is not counted: this measures interaction, not playback.
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
 - There is **no idle detection** while the screen is still on. If you walk away without the screen blanking, that time is still counted.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
@@ -92,7 +92,7 @@ make pack       # build dist/screen-time@gnome-screen-time.shell-extension.zip
 make clean
 ```
 
-`make check` uses `gjs -m` — note that `gjs -c` runs a string, it does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.
+`make check` uses `gjs -m`. Note that `gjs -c` runs a string and does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.
 
 The packaged archive is validated with [shexli](https://pypi.org/project/shexli/) before release:
 

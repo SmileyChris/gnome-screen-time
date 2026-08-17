@@ -74,7 +74,7 @@ export class PopupWidget {
         this._build();
     }
 
-    // How far back paging is allowed — every day in the retention window,
+    // How far back paging is allowed: every day in the retention window,
     // even empty ones (they render a "no data" panel instead of a dead arrow).
     _earliestKey() {
         let retention = this._settings.get_int('retention-days');
@@ -112,8 +112,8 @@ export class PopupWidget {
             for (let i = 0; i < top.length; i++)
                 this._addAppRow(top[i], total, COLORS[i % COLORS.length]);
 
-            // Everything not given its own row — including the sub-minute apps
-            // — is folded in here, so the rows reconcile with the total.
+            // Everything not given its own row, including the sub-minute apps,
+            // is folded in here, so the rows reconcile with the total.
             let rest = all.filter(a => !top.includes(a));
             if (rest.length > 0) {
                 let restSeconds = rest.reduce((s, a) => s + a.seconds, 0);
@@ -210,7 +210,7 @@ export class PopupWidget {
         }));
 
         // The gradient is per-usage and therefore inline, which outranks any
-        // stylesheet :hover rule — so the hover swap is done here instead.
+        // stylesheet :hover rule, so the hover swap is done here instead.
         card.connect('notify::hover', () => {
             card.style = cardStyle(tier, card.hover);
         });

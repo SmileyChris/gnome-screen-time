@@ -11,7 +11,7 @@ const AUTOSAVE_INTERVAL = 30;
 const MANUAL_PURGE_DAYS = 7;
 
 // Date keys double as the on-disk JSON keys, so this format is a storage
-// contract — every caller formats through here rather than repeating it.
+// contract, so every caller formats through here rather than repeating it.
 export function dateKey(dateTime) {
     return dateTime.format('%Y-%m-%d');
 }
@@ -22,7 +22,7 @@ export function todayKey() {
 
 // appId -> displayName for every app that appears anywhere in `data`. Shared
 // by UsageStore (live in-memory data) and prefs.js (data read from disk) so
-// both pick from the exact same set of "known" apps. Skips "Unknown" —
+// both pick from the exact same set of "known" apps. Skips "Unknown",
 // Shell's fallback name for windows it can't identify, not a real app.
 export function knownAppsFromData(data) {
     let known = new Map();
@@ -76,7 +76,7 @@ export class UsageStore {
                 .load_contents_async(this._cancellable);
             loaded = JSON.parse(new TextDecoder().decode(contents));
         } catch (e) {
-            // Cancelled by destroy() — the store is gone, nothing left to do.
+            // Cancelled by destroy(): the store is gone, nothing left to do.
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
             // A missing file is the normal first-run case, not an error.
@@ -169,7 +169,7 @@ export class UsageStore {
         return this.getTotalForDate(todayKey());
     }
 
-    // Per-app usage for one day, biggest first, unfiltered — callers decide
+    // Per-app usage for one day, biggest first, unfiltered. Callers decide
     // what's worth showing.
     getUsageForDate(dateKey) {
         let day = this._data[dateKey];
