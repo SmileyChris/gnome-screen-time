@@ -5,14 +5,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
 import { todayKey, dateKey } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
+import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
 
-const ROW_W = 230;
-const BAR_W = ROW_W - 16;
-// Neutral gray reads correctly on both light and dark Shell themes.
-const TRACK_BG = 'rgba(128,128,128,0.18)';
-// Actor opacity, not a fixed color, so it fades whatever the theme supplies
-// (St has no `dim-label` — that's a GTK class).
-const DIM_OPACITY = 160;
 const MAX_VISIBLE = 5;
 const MIN_ROW_SECONDS = 60;
 const COLORS = ['#3584e4', '#33d17a', '#e5a50a', '#9141ac', '#ed333b'];
@@ -250,17 +244,7 @@ export class PopupWidget {
         }));
         row.add_child(topRow);
 
-        let barContainer = new St.BoxLayout({
-            style: 'margin-top: 3px; height: 4px; width: ' + BAR_W + 'px; ' +
-                   'background-color: ' + TRACK_BG + '; border-radius: 3px;',
-        });
-        let barFill = new St.Widget({
-            style: 'height: 4px; background-color: ' + color + '; border-radius: 3px;',
-            x_expand: false,
-        });
-        barFill.set_width(fillW);
-        barContainer.add_child(barFill);
-        row.add_child(barContainer);
+        row.add_child(makeUsageBar(fillW, color));
 
         item.add_child(row);
         this._menu.addMenuItem(item);
@@ -299,16 +283,7 @@ export class PopupWidget {
         topRow.add_child(expandArrow);
         row.add_child(topRow);
 
-        let barContainer = new St.BoxLayout({
-            style: 'margin-top: 3px; height: 4px; width: ' + BAR_W + 'px; ' +
-                   'background-color: ' + TRACK_BG + '; border-radius: 3px;',
-        });
-        let barFill = new St.Widget({
-            style: 'height: 4px; background-color: ' + color + '; border-radius: 3px;',
-        });
-        barFill.set_width(fillW);
-        barContainer.add_child(barFill);
-        row.add_child(barContainer);
+        row.add_child(makeUsageBar(fillW, color));
 
         let btn = new St.Button({child: row, style: 'padding: 0;'});
         item.add_child(btn);
