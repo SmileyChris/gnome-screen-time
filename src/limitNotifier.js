@@ -1,6 +1,6 @@
-import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { getAppLimits } from './appLimits.js';
+import { todayKey } from './usageStore.js';
 
 export class LimitNotifier {
     constructor(settings) {
@@ -14,7 +14,7 @@ export class LimitNotifier {
         if (!limitMinutes || todaySeconds < limitMinutes * 60)
             return;
 
-        let today = GLib.DateTime.new_now_local().format('%Y-%m-%d');
+        let today = todayKey();
         if (this._notifiedToday[appId] === today)
             return;
         this._notifiedToday[appId] = today;

@@ -10,8 +10,14 @@ export const STORE_FILE = GLib.build_filenamev([STORE_DIR, 'usage.json']);
 const AUTOSAVE_INTERVAL = 30;
 const MANUAL_PURGE_DAYS = 7;
 
+// Date keys double as the on-disk JSON keys, so this format is a storage
+// contract — every caller formats through here rather than repeating it.
+export function dateKey(dateTime) {
+    return dateTime.format('%Y-%m-%d');
+}
+
 export function todayKey() {
-    return GLib.DateTime.new_now_local().format('%Y-%m-%d');
+    return dateKey(GLib.DateTime.new_now_local());
 }
 
 // appId -> displayName for every app that appears anywhere in `data`. Shared
@@ -134,8 +140,7 @@ export class UsageStore {
     }
 
     _deleteOlderThan(days) {
-        let cutoff = GLib.DateTime.new_now_local().add_days(-days);
-        let cutoffKey = cutoff.format('%Y-%m-%d');
+        let cutoffKey = dateKey(GLib.DateTime.new_now_local().add_days(-days));
         let changed = false;
         for (let key in this._data) {
             if (key < cutoffKey) {
