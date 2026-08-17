@@ -3,7 +3,7 @@ import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
-import { todayKey } from './usageStore.js';
+import { todayKey, dateKey } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 
 const ROW_W = 230;
@@ -46,7 +46,7 @@ function keyToDate(key) {
 }
 
 function shiftKey(key, days) {
-    return keyToDate(key).add_days(days).format('%Y-%m-%d');
+    return dateKey(keyToDate(key).add_days(days));
 }
 
 function labelForKey(key) {

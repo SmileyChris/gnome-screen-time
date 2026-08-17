@@ -3,7 +3,7 @@ import Gtk from 'gi://Gtk';
 import Adw from 'gi://Adw';
 import GLib from 'gi://GLib';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
-import { STORE_FILE, knownAppsFromData } from './usageStore.js';
+import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
 
@@ -33,7 +33,7 @@ function lastDays(data, count) {
     let days = [];
     for (let i = count - 1; i >= 0; i--) {
         let day = now.add_days(-i);
-        let seconds = Object.values(data[day.format('%Y-%m-%d')] ?? {})
+        let seconds = Object.values(data[dateKey(day)] ?? {})
             .reduce((s, a) => s + a.seconds, 0);
         days.push({
             label: i === 0 ? 'Today' : day.format('%a'),
