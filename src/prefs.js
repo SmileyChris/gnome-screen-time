@@ -95,7 +95,7 @@ function buildHistogram(days) {
         });
         cell.append(new Gtk.Label({label: d.label, css_classes: ['caption']}));
         cell.append(new Gtk.Label({
-            label: d.seconds > 0 ? formatTime(d.seconds) : '—',
+            label: d.seconds > 0 ? formatTime(d.seconds) : '-',
             css_classes: ['caption', 'dim-label'],
         }));
         labels.append(cell);
