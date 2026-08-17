@@ -5,15 +5,12 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
 import { todayKey } from './usageStore.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
+import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
 
 const STEP_MINUTES = 5;
 const MIN_MINUTES = 5;
 const MAX_MINUTES = 1440;
 const DEFAULT_MINUTES = 30;
-const DIM_OPACITY = 160;
-const ROW_W = 230;
-const BAR_W = ROW_W - 16;
-const TRACK_BG = 'rgba(128,128,128,0.18)';
 const UNDER_LIMIT_COLOR = '#3584e4';
 const OVER_LIMIT_COLOR = '#e5a50a';
 // Caps the panel to roughly 10 short rows before it scrolls, so a long app
@@ -199,16 +196,7 @@ export class AppTimerSection {
 
         let pct = Math.min(usedSeconds / limitSeconds, 1) * 100;
         let color = usedSeconds >= limitSeconds ? OVER_LIMIT_COLOR : UNDER_LIMIT_COLOR;
-        let barContainer = new St.BoxLayout({
-            style: `margin-top: 3px; height: 4px; width: ${BAR_W}px; ` +
-                   `background-color: ${TRACK_BG}; border-radius: 3px;`,
-        });
-        let barFill = new St.Widget({
-            style: `height: 4px; background-color: ${color}; border-radius: 3px;`,
-        });
-        barFill.set_width(Math.round(BAR_W * pct / 100));
-        barContainer.add_child(barFill);
-        row.add_child(barContainer);
+        row.add_child(makeUsageBar(Math.round(BAR_W * pct / 100), color));
 
         this._box.add_child(row);
     }

@@ -3,7 +3,7 @@ import Gtk from 'gi://Gtk';
 import Adw from 'gi://Adw';
 import GLib from 'gi://GLib';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
-import { STORE_FILE, knownAppsFromData } from './usageStore.js';
+import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
 
@@ -13,7 +13,7 @@ const CHART_HEIGHT = 110;
 // as one product.
 const BAR_RGB = [0x35 / 255, 0x84 / 255, 0xe4 / 255];
 
-// Sync read is fine here — prefs runs in its own process, not the compositor.
+// Sync read is fine here: prefs runs in its own process, not the compositor.
 function loadUsageData() {
     let file = Gio.File.new_for_path(STORE_FILE);
     if (!file.query_exists(null))
@@ -33,7 +33,7 @@ function lastDays(data, count) {
     let days = [];
     for (let i = count - 1; i >= 0; i--) {
         let day = now.add_days(-i);
-        let seconds = Object.values(data[day.format('%Y-%m-%d')] ?? {})
+        let seconds = Object.values(data[dateKey(day)] ?? {})
             .reduce((s, a) => s + a.seconds, 0);
         days.push({
             label: i === 0 ? 'Today' : day.format('%a'),
@@ -95,7 +95,7 @@ function buildHistogram(days) {
         });
         cell.append(new Gtk.Label({label: d.label, css_classes: ['caption']}));
         cell.append(new Gtk.Label({
-            label: d.seconds > 0 ? formatTime(d.seconds) : '—',
+            label: d.seconds > 0 ? formatTime(d.seconds) : '-',
             css_classes: ['caption', 'dim-label'],
         }));
         labels.append(cell);
@@ -113,7 +113,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage();
         window.add(page);
 
-        // -- Panel --
         const panelGroup = new Adw.PreferencesGroup({title: 'Panel'});
         page.add(panelGroup);
 
@@ -125,7 +124,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         panelGroup.add(showTotalRow);
 
-        // -- Tracking --
         const intervalGroup = new Adw.PreferencesGroup({title: 'Tracking'});
         page.add(intervalGroup);
 
@@ -144,10 +142,8 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         intervalGroup.add(intervalRow);
 
-        // -- App Time Limits --
         this._addLimitsGroup(page, settings, data);
 
-        // -- Data Retention --
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
         page.add(retentionGroup);
 
@@ -166,7 +162,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         retentionGroup.add(retentionRow);
 
-        // -- History (bottom) --
         const historyGroup = new Adw.PreferencesGroup({
             title: 'History',
             description: `Total screen time over the last ${HISTORY_DAYS} days.`,
@@ -226,7 +221,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             limitRows.set(appId, row);
         };
 
-        // Listed even if the app dropped out of retained history — the limit is
+        // Listed even if the app dropped out of retained history: the limit is
         // still enforced, so it must stay visible and removable.
         let limits = getAppLimits(settings);
         for (let [appId, minutes] of Object.entries(limits))

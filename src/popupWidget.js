@@ -3,16 +3,10 @@ import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
-import { todayKey } from './usageStore.js';
+import { todayKey, dateKey } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
+import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
 
-const ROW_W = 230;
-const BAR_W = ROW_W - 16;
-// Neutral gray reads correctly on both light and dark Shell themes.
-const TRACK_BG = 'rgba(128,128,128,0.18)';
-// Actor opacity, not a fixed color, so it fades whatever the theme supplies
-// (St has no `dim-label` — that's a GTK class).
-const DIM_OPACITY = 160;
 const MAX_VISIBLE = 5;
 const MIN_ROW_SECONDS = 60;
 const COLORS = ['#3584e4', '#33d17a', '#e5a50a', '#9141ac', '#ed333b'];
@@ -46,7 +40,7 @@ function keyToDate(key) {
 }
 
 function shiftKey(key, days) {
-    return keyToDate(key).add_days(days).format('%Y-%m-%d');
+    return dateKey(keyToDate(key).add_days(days));
 }
 
 function labelForKey(key) {
@@ -80,7 +74,7 @@ export class PopupWidget {
         this._build();
     }
 
-    // How far back paging is allowed — every day in the retention window,
+    // How far back paging is allowed: every day in the retention window,
     // even empty ones (they render a "no data" panel instead of a dead arrow).
     _earliestKey() {
         let retention = this._settings.get_int('retention-days');
@@ -118,8 +112,8 @@ export class PopupWidget {
             for (let i = 0; i < top.length; i++)
                 this._addAppRow(top[i], total, COLORS[i % COLORS.length]);
 
-            // Everything not given its own row — including the sub-minute apps
-            // — is folded in here, so the rows reconcile with the total.
+            // Everything not given its own row, including the sub-minute apps,
+            // is folded in here, so the rows reconcile with the total.
             let rest = all.filter(a => !top.includes(a));
             if (rest.length > 0) {
                 let restSeconds = rest.reduce((s, a) => s + a.seconds, 0);
@@ -216,7 +210,7 @@ export class PopupWidget {
         }));
 
         // The gradient is per-usage and therefore inline, which outranks any
-        // stylesheet :hover rule — so the hover swap is done here instead.
+        // stylesheet :hover rule, so the hover swap is done here instead.
         card.connect('notify::hover', () => {
             card.style = cardStyle(tier, card.hover);
         });
@@ -250,17 +244,7 @@ export class PopupWidget {
         }));
         row.add_child(topRow);
 
-        let barContainer = new St.BoxLayout({
-            style: 'margin-top: 3px; height: 4px; width: ' + BAR_W + 'px; ' +
-                   'background-color: ' + TRACK_BG + '; border-radius: 3px;',
-        });
-        let barFill = new St.Widget({
-            style: 'height: 4px; background-color: ' + color + '; border-radius: 3px;',
-            x_expand: false,
-        });
-        barFill.set_width(fillW);
-        barContainer.add_child(barFill);
-        row.add_child(barContainer);
+        row.add_child(makeUsageBar(fillW, color));
 
         item.add_child(row);
         this._menu.addMenuItem(item);
@@ -299,16 +283,7 @@ export class PopupWidget {
         topRow.add_child(expandArrow);
         row.add_child(topRow);
 
-        let barContainer = new St.BoxLayout({
-            style: 'margin-top: 3px; height: 4px; width: ' + BAR_W + 'px; ' +
-                   'background-color: ' + TRACK_BG + '; border-radius: 3px;',
-        });
-        let barFill = new St.Widget({
-            style: 'height: 4px; background-color: ' + color + '; border-radius: 3px;',
-        });
-        barFill.set_width(fillW);
-        barContainer.add_child(barFill);
-        row.add_child(barContainer);
+        row.add_child(makeUsageBar(fillW, color));
 
         let btn = new St.Button({child: row, style: 'padding: 0;'});
         item.add_child(btn);
@@ -373,4 +348,4 @@ export class PopupWidget {
         this._openPrefs = null;
         this._timerSection = null;
     }
-};
+}

@@ -17,7 +17,7 @@ schemas:
 build: schemas
 
 # Install to the local GNOME Shell extensions directory. Copying the whole of
-# src/ means a new module never has to be registered anywhere — if it is in
+# src/ means a new module never has to be registered anywhere. If it is in
 # src/, it ships.
 install: build
 	@mkdir -p $(EXTENSION_DIR)
@@ -31,7 +31,7 @@ uninstall:
 
 # Distributable archive for extensions.gnome.org.
 # NOTE: per EGO-P-006, compiled schemas MUST NOT be shipped for shell-version
-# 45+ — GNOME Shell compiles them at install time. This target therefore does
+# 45+; GNOME Shell compiles them at install time. This target therefore does
 # NOT depend on `build`, and excludes any *.compiled defensively.
 pack:
 	@mkdir -p $(DIST_DIR)
@@ -41,7 +41,7 @@ pack:
 	@zip -q -j $(PACK_FILE) LICENSE
 	@echo "Packed: $(PACK_FILE)"
 
-# Syntax-check every module. `gjs -c` runs a string — it does NOT check syntax;
+# Syntax-check every module. `gjs -c` runs a string and does NOT check syntax;
 # `gjs -m` does. Import errors for resource:///org/gnome/... and missing Shell
 # typelibs are expected outside a live Shell, so only SyntaxError counts.
 check:

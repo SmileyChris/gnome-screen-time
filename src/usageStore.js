@@ -10,13 +10,19 @@ export const STORE_FILE = GLib.build_filenamev([STORE_DIR, 'usage.json']);
 const AUTOSAVE_INTERVAL = 30;
 const MANUAL_PURGE_DAYS = 7;
 
+// Date keys double as the on-disk JSON keys, so this format is a storage
+// contract, so every caller formats through here rather than repeating it.
+export function dateKey(dateTime) {
+    return dateTime.format('%Y-%m-%d');
+}
+
 export function todayKey() {
-    return GLib.DateTime.new_now_local().format('%Y-%m-%d');
+    return dateKey(GLib.DateTime.new_now_local());
 }
 
 // appId -> displayName for every app that appears anywhere in `data`. Shared
 // by UsageStore (live in-memory data) and prefs.js (data read from disk) so
-// both pick from the exact same set of "known" apps. Skips "Unknown" —
+// both pick from the exact same set of "known" apps. Skips "Unknown",
 // Shell's fallback name for windows it can't identify, not a real app.
 export function knownAppsFromData(data) {
     let known = new Map();
@@ -70,12 +76,12 @@ export class UsageStore {
                 .load_contents_async(this._cancellable);
             loaded = JSON.parse(new TextDecoder().decode(contents));
         } catch (e) {
-            // Cancelled by destroy() — the store is gone, nothing left to do.
+            // Cancelled by destroy(): the store is gone, nothing left to do.
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
             // A missing file is the normal first-run case, not an error.
             if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
-                log('[ScreenTime] load error: ' + e.message);
+                console.error(`[ScreenTime] load error: ${e.message}`);
         }
 
         if (loaded)
@@ -116,7 +122,7 @@ export class UsageStore {
             );
             this._dirty = false;
         } catch (e) {
-            log('[ScreenTime] save error: ' + e.message);
+            console.error(`[ScreenTime] save error: ${e.message}`);
         }
     }
 
@@ -134,8 +140,7 @@ export class UsageStore {
     }
 
     _deleteOlderThan(days) {
-        let cutoff = GLib.DateTime.new_now_local().add_days(-days);
-        let cutoffKey = cutoff.format('%Y-%m-%d');
+        let cutoffKey = dateKey(GLib.DateTime.new_now_local().add_days(-days));
         let changed = false;
         for (let key in this._data) {
             if (key < cutoffKey) {
@@ -164,7 +169,7 @@ export class UsageStore {
         return this.getTotalForDate(todayKey());
     }
 
-    // Per-app usage for one day, biggest first, unfiltered — callers decide
+    // Per-app usage for one day, biggest first, unfiltered. Callers decide
     // what's worth showing.
     getUsageForDate(dateKey) {
         let day = this._data[dateKey];
