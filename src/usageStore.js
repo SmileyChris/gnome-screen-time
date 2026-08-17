@@ -81,7 +81,7 @@ export class UsageStore {
                 return;
             // A missing file is the normal first-run case, not an error.
             if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
-                log('[ScreenTime] load error: ' + e.message);
+                console.error(`[ScreenTime] load error: ${e.message}`);
         }
 
         if (loaded)
@@ -122,7 +122,7 @@ export class UsageStore {
             );
             this._dirty = false;
         } catch (e) {
-            log('[ScreenTime] save error: ' + e.message);
+            console.error(`[ScreenTime] save error: ${e.message}`);
         }
     }
 
