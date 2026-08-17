@@ -16,11 +16,10 @@ export const PanelIndicator = class extends PanelMenu.Button {
         const hbox = new St.BoxLayout({
             style_class: 'panel-status-menu-box',
         });
-        this._icon = new St.Icon({
+        hbox.add_child(new St.Icon({
             icon_name: 'alarm-symbolic',
             style_class: 'system-status-icon',
-        });
-        hbox.add_child(this._icon);
+        }));
         this._label = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
@@ -36,10 +35,6 @@ export const PanelIndicator = class extends PanelMenu.Button {
 
     addToPanel(uuid) {
         Main.panel.addToStatusArea(uuid, this);
-    }
-
-    setTracking(active) {
-        this._icon.opacity = active ? 255 : 128;
     }
 
     setTotal(seconds) {
@@ -59,9 +54,5 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._label.visible = visible;
         if (visible)
             this._label.text = formatTime(this._totalSeconds);
-    }
-
-    destroy() {
-        super.destroy();
     }
 };
