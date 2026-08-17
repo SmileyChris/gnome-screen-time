@@ -348,4 +348,4 @@ export class PopupWidget {
         this._openPrefs = null;
         this._timerSection = null;
     }
-};
+}
