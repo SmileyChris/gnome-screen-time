@@ -13,7 +13,7 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 - **Day-by-day history** — `‹ Today ›` steps back one day at a time.
 - **App time limits** — set a daily limit per app and get a desktop notification once you cross it.
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
-- **Accurate by default** — time on the lock screen, while the screen is blanked, or while suspended is never counted.
+- **Presence-aware** — time on the lock screen, while the screen is blanked, or while suspended is never counted.
 - **Local only** — a plain JSON file on your disk. No network access, no telemetry.
 
 ## Requirements
@@ -22,10 +22,8 @@ GNOME Shell 47, 48, 49 or 50. X11 or Wayland.
 
 ## Install
 
-### From source
-
 ```bash
-git clone <your-repo-url> gnome-screen-time
+git clone https://github.com/itsdigvijaysing/gnome-screen-time
 cd gnome-screen-time
 make install
 ```
@@ -39,8 +37,7 @@ Then reload GNOME Shell and enable it:
 gnome-extensions enable screen-time@gnome-screen-time
 ```
 
-
-### Preferences
+## Preferences
 
 Open from the gear icon at the bottom of the popup, or:
 
