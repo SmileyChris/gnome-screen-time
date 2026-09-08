@@ -272,7 +272,7 @@ export class PopupWidget {
         let rest = named.filter(e => !top.includes(e));
         let restSeconds = rest.reduce((s, e) => s + e.seconds, 0) + (stored?.seconds ?? 0);
         let restCount = rest.length + (stored?.count ?? 0);
-        // Below level 1 the parent's own time shows as a "No breakdown" row.
+        // Below level 1 the parent's own time shows as a "Unattributed" row.
         let direct = depth > 0
             ? Math.max(0, parentTotal - entries.reduce((s, e) => s + e.seconds, 0))
             : 0;
@@ -307,7 +307,7 @@ export class PopupWidget {
         // long press on the parent reveals it, so direct time can be added.
         if (depth > 0) {
             let row = this._addLeaf({
-                name: 'No breakdown',
+                name: 'Unattributed',
                 seconds: direct,
                 pct: pctOf(direct, parentTotal),
                 barPct: pctOf(direct, basis),
