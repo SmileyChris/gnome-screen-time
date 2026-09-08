@@ -16,7 +16,11 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
         this._popup = new PopupWidget(this._indicator.menu, this._store,
-            this._settings, () => this.openPreferences());
+            this._settings, () => {
+                // The Shell refuses a second prefs dialog; that is not an error
+                // worth an unhandled rejection in the journal.
+                this.openPreferences().catch(e => console.debug(`[ScreenTime] prefs: ${e.message}`));
+            });
 
         // The browser companion pushes into this source over D-Bus; the same
         // instance sits in the registry the tracker reads from.
