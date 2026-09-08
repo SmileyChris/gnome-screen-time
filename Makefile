@@ -46,7 +46,7 @@ pack:
 # typelibs are expected outside a live Shell, so only SyntaxError counts.
 check:
 	@fail=0; \
-	for f in $(SRC_DIR)/*.js; do \
+	for f in $(SRC_DIR)/*.js $(wildcard companion/webext/*.js) $(wildcard companion/host/*.js); do \
 		if gjs -m "$$f" 2>&1 | grep -qi "SyntaxError"; then \
 			echo "SyntaxError in $$f"; fail=1; \
 		fi; \

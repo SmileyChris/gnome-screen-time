@@ -2,6 +2,12 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import System from 'system';
 import { runAll } from './harness.js';
+import { installURLShim } from './urlShim.js';
+
+// companion/webext/rules.js is written against the browser's `URL` global,
+// which gjs does not provide. Install a GLib.Uri-backed stand-in before the
+// test modules load.
+installURLShim();
 
 // usageStore.js computes its file path from XDG_DATA_HOME at import time, so
 // point it at a scratch directory before any test module is imported. This
@@ -13,6 +19,7 @@ const FILES = [
     './zellijLayout.test.js',
     './usageStore.test.js',
     './activitySources.test.js',
+    './rules.test.js',
 ];
 
 // Deletes the usage.json (and its parent dirs) that UsageStore wrote under
