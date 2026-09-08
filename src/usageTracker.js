@@ -104,8 +104,16 @@ export class UsageTracker {
     _flush(now) {
         let elapsed = (now - this._lastTime) / 1000;
         let secs = Math.min(elapsed, this._getMaxInterval());
-        if (!this._path || secs <= 0) {
+        if (!this._path) {
             this._lastTime = now;
+            return;
+        }
+        if (secs <= 0) {
+            // In debt from a previous round-up: leave the clock so the debt
+            // is repaid by the next flush. A whole negative second cannot
+            // come from rounding, so that is a clock jump: resynchronise.
+            if (secs <= -1)
+                this._lastTime = now;
             return;
         }
         let credited = Math.round(secs);
