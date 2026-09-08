@@ -6,7 +6,7 @@ SCHEMAS_DIR   = $(SRC_DIR)/schemas
 DIST_DIR      = dist
 PACK_FILE     = $(DIST_DIR)/$(UUID).shell-extension.zip
 
-.PHONY: all build schemas install uninstall pack lint check clean restart
+.PHONY: all build schemas install uninstall pack lint check test clean restart
 
 all: build
 
@@ -53,6 +53,11 @@ check:
 	done; \
 	python3 -m json.tool $(SRC_DIR)/metadata.json >/dev/null || fail=1; \
 	if [ $$fail -eq 0 ]; then echo "check: clean"; else exit 1; fi
+
+# Unit tests for the pure modules. run.js redirects XDG_DATA_HOME to a scratch
+# directory itself, so this never touches the real usage.json.
+test:
+	@gjs -m tests/run.js
 
 lint:
 	@if command -v eslint >/dev/null 2>&1; then \
