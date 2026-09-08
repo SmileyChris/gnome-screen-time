@@ -87,3 +87,59 @@ test('getKnownApps: reads level 1 only', async () => {
     assertEqual([...store.getKnownApps()], [['kgx', 'Console']]);
     store.destroy();
 });
+
+test('fold: the 21st named child folds the smallest sibling into __other__', async () => {
+    let store = await freshStore();
+    for (let i = 0; i < MAX_CHILDREN; i++)
+        store.addTime(['kgx', 'claude', `repo-${i}`], ['Console', 'claude', `repo-${i}`], 100 + i);
+    // repo-0 (100s) is the smallest and gets folded to make room.
+    store.addTime(['kgx', 'claude', 'repo-new'], ['Console', 'claude', 'repo-new'], 7);
+
+    let [entry] = store.getUsageForDate(todayKey());
+    let details = sortedChildren(sortedChildren(entry.children)[0].children);
+    let named = details.filter(d => d.id !== OTHER_KEY);
+    let other = details.find(d => d.id === OTHER_KEY);
+
+    assertEqual(named.length, MAX_CHILDREN);
+    assert(!named.some(d => d.id === 'repo-0'), 'repo-0 was folded');
+    assert(named.some(d => d.id === 'repo-new'), 'the newcomer got a slot');
+    assertEqual(other.seconds, 100);
+    assertEqual(other.count, 1);
+    assertEqual(other.displayName, 'Other');
+
+    let sum = details.reduce((s, d) => s + d.seconds, 0);
+    assertEqual(sum, sortedChildren(entry.children)[0].seconds, 'details reconcile with activity');
+    store.destroy();
+});
+
+test('fold: repeated overflow accumulates into one __other__ node', async () => {
+    let store = await freshStore();
+    for (let i = 0; i < MAX_CHILDREN + 3; i++)
+        store.addTime(['kgx', 'claude', `r${i}`], ['Console', 'claude', `r${i}`], 10);
+    let [entry] = store.getUsageForDate(todayKey());
+    let details = sortedChildren(sortedChildren(entry.children)[0].children);
+    let other = details.find(d => d.id === OTHER_KEY);
+    assertEqual(details.length, MAX_CHILDREN + 1, '20 named plus one other');
+    assertEqual(other.count, 3);
+    assertEqual(other.seconds, 30);
+    store.destroy();
+});
+
+test('fold: crediting an existing child never triggers a fold', async () => {
+    let store = await freshStore();
+    for (let i = 0; i < MAX_CHILDREN; i++)
+        store.addTime(['kgx', `cmd-${i}`], ['Console', `cmd-${i}`], 10);
+    store.addTime(['kgx', 'cmd-3'], ['Console', 'cmd-3'], 10);
+    let [entry] = store.getUsageForDate(todayKey());
+    assert(!(OTHER_KEY in entry.children), 'no other node');
+    assertEqual(entry.children['cmd-3'].seconds, 20);
+    store.destroy();
+});
+
+test('fold: level 1 is not capped', async () => {
+    let store = await freshStore();
+    for (let i = 0; i < MAX_CHILDREN + 5; i++)
+        store.addTime([`app-${i}`], [`App ${i}`], 10);
+    assertEqual(store.getUsageForDate(todayKey()).length, MAX_CHILDREN + 5);
+    store.destroy();
+});
