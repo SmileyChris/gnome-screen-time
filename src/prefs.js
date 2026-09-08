@@ -166,6 +166,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         });
         intervalGroup.add(idleRow);
 
+        this._addCompanionsGroup(page, window);
         this._addLimitsGroup(page, settings, data);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
@@ -209,6 +210,58 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         historyGroup.add(purgeRow);
 
         window.set_focus(null);
+    }
+
+    // Live status of the browser companions, read from the running Shell
+    // extension over D-Bus and refreshed while the window is open.
+    _addCompanionsGroup(page, window) {
+        const NAMES = { brave: 'Brave', chrome: 'Google Chrome', zen: 'Zen Browser' };
+        const group = new Adw.PreferencesGroup({
+            title: 'Browser Companions',
+            description: 'Sites and page sections are only tracked while the companion extension is loaded in the browser. See companion/README.md.',
+        });
+        page.add(group);
+        const rows = new Map();
+        for (const [id, name] of Object.entries(NAMES)) {
+            const row = new Adw.ActionRow({title: name, subtitle: 'Checking...'});
+            rows.set(id, row);
+            group.add(row);
+        }
+
+        const refresh = () => {
+            Gio.DBus.session.call(
+                'org.gnome.Shell', '/org/gnome/Shell/Extensions/ScreenTime',
+                'org.gnome.Shell.Extensions.ScreenTime', 'GetCompanions',
+                null, new GLib.VariantType('(a(ssb))'), Gio.DBusCallFlags.NONE, 1000, null,
+                (conn, res) => {
+                    let list;
+                    try {
+                        [list] = conn.call_finish(res).deepUnpack();
+                    } catch (e) {
+                        for (const row of rows.values())
+                            row.subtitle = 'Screen Time extension is not running';
+                        return;
+                    }
+                    for (const [id, host, connected] of list) {
+                        const row = rows.get(id);
+                        if (!row)
+                            continue;
+                        if (!connected)
+                            row.subtitle = 'Not connected. Load the companion extension in this browser.';
+                        else
+                            row.subtitle = host ? `Connected, on ${host}` : 'Connected, no site in focus';
+                    }
+                });
+        };
+        refresh();
+        const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+            refresh();
+            return GLib.SOURCE_CONTINUE;
+        });
+        window.connect('close-request', () => {
+            GLib.source_remove(timer);
+            return false;
+        });
     }
 
     _addLimitsGroup(page, settings, data) {

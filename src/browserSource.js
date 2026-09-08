@@ -56,6 +56,12 @@ export class BrowserSource {
         return this.setState(browser, null, null);
     }
 
+    // The last report for a browser as {host, detail}, or null when it has
+    // none (no breakdown, or never reported).
+    getState(browser) {
+        return this._state.get(browser) ?? null;
+    }
+
     resolve(win, appId) {
         let browser = BROWSER_APP_IDS[appId];
         let s = browser ? this._state.get(browser) : null;

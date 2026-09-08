@@ -11,6 +11,9 @@ const INTERFACE_XML = `
       <arg type="s" direction="in" name="host"/>
       <arg type="s" direction="in" name="detail"/>
     </method>
+    <method name="GetCompanions">
+      <arg type="a(ssb)" direction="out" name="companions"/>
+    </method>
   </interface>
 </node>`;
 
@@ -46,6 +49,17 @@ export class DbusService {
         } catch (e) {
             console.error(`[ScreenTime] report handling failed: ${e.message}`);
         }
+    }
+
+    // Read-only status for the preferences window: one tuple per known
+    // browser with its current site (or empty) and whether a native host is
+    // connected for it right now.
+    GetCompanions() {
+        return BROWSERS.map(browser => {
+            let connected = [...this._watches.values()].some(w => w.browser === browser);
+            let state = this._source?.getState(browser);
+            return [browser, state?.host ?? '', connected];
+        });
     }
 
     // One watch per sender and browser: a single connection reporting for

@@ -92,3 +92,13 @@ test('browserSource: claims ignores inherited property names', () => {
     assert(!s.claims('toString'));
     assert(!s.claims('constructor'));
 });
+
+test('browserSource: getState mirrors the last report per browser', () => {
+    let s = new BrowserSource();
+    assertEqual(s.getState('brave'), null);
+    s.setState('brave', 'github.com', 'a/b');
+    assertEqual(s.getState('brave'), { host: 'github.com', detail: 'a/b' });
+    s.setState('brave', '', '');
+    assertEqual(s.getState('brave'), null);
+    assertEqual(s.getState('nope'), null);
+});

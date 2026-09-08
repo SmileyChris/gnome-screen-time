@@ -27,6 +27,8 @@ The native host (`host/screen-time-host.js`, gjs) calls, on the session bus:
     interface    org.gnome.Shell.Extensions.ScreenTime
     method       ReportActiveTab(s browser, s host, s detail) -> ()
 
+    method       GetCompanions() -> a(ssb)   (browser, current site, connected)
+
 Empty `host` means no breakdown. The extension watches the caller's unique
 bus name and clears that browser's state when it vanishes, so closing the
 browser ends the breakdown immediately. The host answers `{"ping": true}`
