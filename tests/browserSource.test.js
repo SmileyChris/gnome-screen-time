@@ -1,5 +1,5 @@
 import { test, assert, assertEqual } from './harness.js';
-import { BrowserSource, BROWSERS } from '../src/browserSource.js';
+import { BrowserSource, BROWSERS, MAX_ID_LENGTH } from '../src/browserSource.js';
 
 test('browserSource: claims exactly the two browser app ids', () => {
     let s = new BrowserSource();
@@ -76,6 +76,14 @@ test('browserSource: a host named __other__ is renamed too', async () => {
     let s = new BrowserSource();
     s.setState('brave', '__other__', 'x');
     assertEqual((await s.resolve({}, 'brave-browser.desktop')).activityId, '_other_');
+});
+
+test('browserSource: an overlong host is capped', async () => {
+    let s = new BrowserSource();
+    s.setState('brave', 'a'.repeat(1000), 'b'.repeat(1000));
+    let sub = await s.resolve({}, 'brave-browser.desktop');
+    assertEqual(sub.activityId.length, MAX_ID_LENGTH);
+    assertEqual(sub.detailId.length, MAX_ID_LENGTH);
 });
 
 test('browserSource: claims ignores inherited property names', () => {

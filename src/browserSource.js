@@ -8,6 +8,11 @@ export const BROWSER_APP_IDS = {
 };
 export const BROWSERS = Object.values(BROWSER_APP_IDS);
 
+// The WebExtension already truncates path segments, but a report arrives
+// over D-Bus from any session process, so cap the ids at the Shell
+// boundary too: these become store keys and label text.
+export const MAX_ID_LENGTH = 256;
+
 // Activity source fed by the browser companion over D-Bus. Holds the last
 // reported {host, detail} per browser and answers from that cache: nothing
 // is spawned, polled or awaited. `onChange(browser)` fires when a browser's
@@ -28,10 +33,12 @@ export class BrowserSource {
             return false;
         let next = null;
         if (host) {
+            let h = host.slice(0, MAX_ID_LENGTH);
+            let d = detail ? detail.slice(0, MAX_ID_LENGTH) : null;
             // A host or path segment literally named "__other__" would merge
             // into the store's fold node for genuinely folded siblings.
-            let h = host === OTHER_KEY ? '_other_' : host;
-            let d = detail || null;
+            if (h === OTHER_KEY)
+                h = '_other_';
             if (d === OTHER_KEY)
                 d = '_other_';
             next = { host: h, detail: d };

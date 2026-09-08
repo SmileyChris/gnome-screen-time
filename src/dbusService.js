@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import { BROWSERS } from './browserSource.js';
 
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime';
 
@@ -20,33 +21,46 @@ const INTERFACE_XML = `
 export class DbusService {
     constructor(browserSource) {
         this._source = browserSource;
-        this._watches = new Map();   // sender unique name -> { id, browser }
+        this._watches = new Map();   // `${sender}\0${browser}` -> { id, browser }
         this._impl = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
         this._impl.export(Gio.DBus.session, OBJECT_PATH);
     }
 
-    // gjs routes a method named `<Method>Async` the invocation, which is how
-    // the sender's unique name is read.
+    // gjs routes a method named `<Method>Async` the raw parameters and the
+    // invocation, which is how the sender's unique name is read.
     ReportActiveTabAsync(params, invocation) {
         let [browser, host, detail] = params;
+        if (!BROWSERS.includes(browser)) {
+            console.debug(`[ScreenTime] ignoring report for unknown browser ${browser}`);
+            invocation.return_value(null);
+            return;
+        }
         // Watch first: the bookkeeping must not depend on the credit
-        // pipeline below succeeding.
+        // pipeline below succeeding. Answer next: the host calls this
+        // synchronously, so a fault in the pipeline must not stall it.
         this._watch(invocation.get_sender(), browser);
-        this._source.setState(browser, host, detail);
         invocation.return_value(null);
+        try {
+            this._source.setState(browser, host, detail);
+        } catch (e) {
+            console.error(`[ScreenTime] report handling failed: ${e.message}`);
+        }
     }
 
+    // One watch per sender and browser: a single connection reporting for
+    // two browsers must clear both when it vanishes.
     _watch(sender, browser) {
-        if (this._watches.has(sender))
+        let key = `${sender}\0${browser}`;
+        if (this._watches.has(key))
             return;
         let id = Gio.bus_watch_name(
             Gio.BusType.SESSION, sender, Gio.BusNameWatcherFlags.NONE,
             null,
             () => {
-                this._watches.delete(sender);
+                this._watches.delete(key);
                 this._source?.clear(browser);
             });
-        this._watches.set(sender, { id, browser });
+        this._watches.set(key, { id, browser });
     }
 
     destroy() {
