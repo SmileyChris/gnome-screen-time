@@ -112,11 +112,25 @@ export class ZellijSource {
 
 // Picks the source that claims an app and debounces its resolves per window.
 // Callers inside the debounce window get the cached (possibly still pending)
-// promise, so concurrent askers never trigger a second spawn.
+// promise, so concurrent askers never trigger a second spawn. A source that
+// pushes state (the browser companion) reports changes through `onChange`;
+// the registry drops its cache so the next resolve sees the new state, and
+// forwards the event to the tracker along with the source that changed, so
+// the tracker can tell whether it describes the window in focus.
 export class ActivitySourceRegistry {
     constructor(sources = [new ZellijSource()]) {
         this._sources = sources;
         this._recent = new WeakMap();   // win -> { at, promise }
+        this.onChange = null;
+        for (let s of sources) {
+            if ('onChange' in s)
+                s.onChange = () => this._onSourceChanged(s);
+        }
+    }
+
+    _onSourceChanged(source) {
+        this._recent = new WeakMap();
+        this.onChange?.(source);
     }
 
     resolve(win, appId, now = Date.now()) {
@@ -137,6 +151,7 @@ export class ActivitySourceRegistry {
     }
 
     destroy() {
+        this.onChange = null;
         for (let s of this._sources)
             s.destroy?.();
         this._sources = [];
