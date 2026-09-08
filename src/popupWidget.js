@@ -266,15 +266,22 @@ export class PopupWidget {
             ? named.filter(e => e.seconds >= MIN_ROW_SECONDS)
             : named;
         let top = eligible.slice(0, MAX_VISIBLE);
-        let basis = this._basisFor(named, parentTotal);
-        let rows = top.map((e, i) =>
-            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length], parentPath, basis));
 
         // Everything not given its own row, including anything the store
         // already folded, goes here so the rows reconcile with the parent.
         let rest = named.filter(e => !top.includes(e));
         let restSeconds = rest.reduce((s, e) => s + e.seconds, 0) + (stored?.seconds ?? 0);
         let restCount = rest.length + (stored?.count ?? 0);
+        // Below level 1 the parent's own time shows as a "No breakdown" row.
+        let direct = depth > 0
+            ? Math.max(0, parentTotal - entries.reduce((s, e) => s + e.seconds, 0))
+            : 0;
+
+        // "Largest" scaling measures against the biggest row actually shown
+        // at this level, which may be the fold or the direct-time row.
+        let basis = this._basisFor([...named, { seconds: restSeconds }, { seconds: direct }], parentTotal);
+        let rows = top.map((e, i) =>
+            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length], parentPath, basis));
         if (restCount > 0) {
             let row = makeExpandableRow({
                 name: `Other ${restCount} ${NOUNS[depth]}`,
@@ -299,8 +306,6 @@ export class PopupWidget {
         // still sum to the parent's total. At zero it stays hidden until a
         // long press on the parent reveals it, so direct time can be added.
         if (depth > 0) {
-            let childTotal = entries.reduce((s, e) => s + e.seconds, 0);
-            let direct = Math.max(0, parentTotal - childTotal);
             let row = this._addLeaf({
                 name: 'No breakdown',
                 seconds: direct,
