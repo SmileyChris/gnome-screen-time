@@ -15,6 +15,7 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
 - **Presence-aware:** time on the lock screen, while the screen is blanked, or while suspended is never counted.
 - **Activity breakdown:** inside a terminal running [zellij](https://zellij.dev), time splits by the focused pane's command and working directory. Expand any row to see it.
+- **Editable history:** long-press a row to correct it with a slider, delete it, or delete a whole app's day, with one level of undo.
 - **Local only:** a plain JSON file on your disk. No network access, no telemetry.
 
 ## Requirements
@@ -76,7 +77,7 @@ Usage is stored at:
 ~/.local/share/gnome-shell/screen-time/usage.json
 ```
 
-It is keyed by date, then by app, where the date is the logical day set by **Day Starts At**. An app may carry a `children` map (activity, then detail) when a breakdown source applies; the app's own `seconds` is always the total including its children, so older versions read the file as plain per-app data. Each parent keeps at most 20 named children per day; the rest fold into an `__other__` entry. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
+It is keyed by date, then by app, where the date is the logical day set by **Day Starts At**. An app may carry a `children` map (activity, then detail) when a breakdown source applies; the app's own `seconds` is always the total including its children, so older versions read the file as plain per-app data. Each parent keeps at most 20 named children per day; the rest fold into an `__other__` entry. Long-press a row in the popup to edit it: leaves get a slider (Save, or Delete at zero); a parent expands, shows its own unattributed time, and offers Delete all. Undo edit in the popup footer reverts the last edit on that day until the next edit or a Shell restart. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
 
 ## Development
 

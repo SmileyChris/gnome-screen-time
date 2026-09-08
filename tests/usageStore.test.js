@@ -512,3 +512,136 @@ test('merge: a late file cannot leave a parent above MAX_CHILDREN', async () => 
     assertEqual(sum, entry.seconds, 'children still reconcile with the parent');
     store.destroy();
 });
+
+// setDirectSeconds: edits a node's own (unbroken-down) time; ancestors follow.
+async function editableStore() {
+    let store = await freshStore();
+    store.addTime(['kgx', 'claude', 'repo-a'], ['Console', 'claude', 'repo-a'], 1200);
+    store.addTime(['kgx', 'claude', 'repo-b'], ['Console', 'claude', 'repo-b'], 600);
+    store.addTime(['kgx', 'shell'], ['Console', 'shell'], 300);
+    store.addTime(['kgx'], ['Console'], 900);   // direct time on the app
+    return store;
+}
+
+test('setDirectSeconds: leaf edit propagates the delta to every ancestor', async () => {
+    let store = await editableStore();
+    let changed = 0;
+    store.onChange = () => changed++;
+    assertEqual(store.setDirectSeconds(todayKey(), ['kgx', 'claude', 'repo-a'], 600), true);
+    let [kgx] = store.getUsageForDate(todayKey());
+    assertEqual(kgx.seconds, 2400);
+    let claude = sortedChildren(kgx.children).find(c => c.id === 'claude');
+    assertEqual(claude.seconds, 1200);
+    assertEqual(sortedChildren(claude.children).find(c => c.id === 'repo-a').seconds, 600);
+    assertEqual(sortedChildren(claude.children).find(c => c.id === 'repo-b').seconds, 600, 'sibling untouched');
+    assertEqual(changed, 1);
+    store.destroy();
+});
+
+test('setDirectSeconds: direct edit on a parent leaves its children alone', async () => {
+    let store = await editableStore();
+    // Console direct time is 900 (3000 total minus 2100 in children).
+    assertEqual(store.setDirectSeconds(todayKey(), ['kgx'], 0), true);
+    let [kgx] = store.getUsageForDate(todayKey());
+    assertEqual(kgx.seconds, 2100);
+    assertEqual(sortedChildren(kgx.children).reduce((s, c) => s + c.seconds, 0), 2100);
+    assertEqual(store.setDirectSeconds(todayKey(), ['kgx'], 1800), true, 'increase goes to direct');
+    assertEqual(store.getUsageForDate(todayKey())[0].seconds, 3900);
+    store.destroy();
+});
+
+test('setDirectSeconds: zero removes a leaf and prunes an empty children map', async () => {
+    let store = await editableStore();
+    store.setDirectSeconds(todayKey(), ['kgx', 'shell'], 0);
+    let [kgx] = store.getUsageForDate(todayKey());
+    assertEqual(kgx.seconds, 2700);
+    assert(!('shell' in kgx.children), 'shell removed');
+    store.setDirectSeconds(todayKey(), ['kgx', 'claude', 'repo-a'], 0);
+    store.setDirectSeconds(todayKey(), ['kgx', 'claude', 'repo-b'], 0);
+    [kgx] = store.getUsageForDate(todayKey());
+    assertEqual(kgx.seconds, 900);
+    assertEqual(kgx.children, null, 'claude (now 0, no children) and the map are gone');
+    store.destroy();
+});
+
+test('setDirectSeconds: a level-1 app at zero disappears from the day', async () => {
+    let store = await freshStore();
+    store.addTime(['a'], ['A'], 100);
+    store.addTime(['b'], ['B'], 50);
+    store.setDirectSeconds(todayKey(), ['a'], 0);
+    assertEqual(store.getUsageForDate(todayKey()).map(e => e.appId), ['b']);
+    assertEqual(store.getTotalForDate(todayKey()), 50);
+    store.destroy();
+});
+
+test('setDirectSeconds: unknown path, unknown day, or unchanged value is a no-op', async () => {
+    let store = await editableStore();
+    let changed = 0;
+    store.onChange = () => changed++;
+    assertEqual(store.setDirectSeconds(todayKey(), ['nope'], 5), false);
+    assertEqual(store.setDirectSeconds(todayKey(), ['kgx', 'nope'], 5), false);
+    assertEqual(store.setDirectSeconds('1999-01-01', ['kgx'], 5), false);
+    assertEqual(store.setDirectSeconds(todayKey(), ['kgx'], 900), false, 'same direct value');
+    assertEqual(store.setDirectSeconds(todayKey(), ['kgx'], -5), false, 'negative rejected');
+    assertEqual(changed, 0);
+    assertEqual(store.getUsageForDate(todayKey())[0].seconds, 3000);
+    store.destroy();
+});
+
+test('setDirectSeconds: edits on a past day survive save and load', async () => {
+    let old = dateKey(GLib.DateTime.new_now_local().add_days(-2));
+    let store = await freshStore(new FakeSettings(), {
+        [old]: { app: { displayName: 'App', seconds: 500, children: { x: { displayName: 'x', seconds: 200 } } } },
+    });
+    assertEqual(store.setDirectSeconds(old, ['app', 'x'], 50), true);
+    assertEqual(store.getUsageForDate(old)[0].seconds, 350);
+    store.destroy();
+    assertEqual(readStoreFile()[old].app.seconds, 350);
+});
+
+test('removeNode: drops a parent and its children, ancestors shrink by its total', async () => {
+    let store = await editableStore();
+    let changed = 0;
+    store.onChange = () => changed++;
+    assertEqual(store.removeNode(todayKey(), ['kgx', 'claude']), true);
+    let [kgx] = store.getUsageForDate(todayKey());
+    assertEqual(kgx.seconds, 1200);
+    assertEqual(Object.keys(kgx.children), ['shell']);
+    assertEqual(store.removeNode(todayKey(), ['kgx']), true);
+    assertEqual(store.getUsageForDate(todayKey()), []);
+    assertEqual(store.removeNode(todayKey(), ['kgx']), false, 'already gone');
+    assertEqual(changed, 2);
+    store.destroy();
+});
+
+test('undo: restores the day as it was before the last edit, once', async () => {
+    let store = await editableStore();
+    assertEqual(store.canUndo(todayKey()), false);
+    store.setDirectSeconds(todayKey(), ['kgx', 'claude', 'repo-a'], 0);
+    store.removeNode(todayKey(), ['kgx', 'shell']);
+    assertEqual(store.canUndo(todayKey()), true, 'snapshot from before the first edit is replaced by the second');
+    let changed = 0;
+    store.onChange = () => changed++;
+    assertEqual(store.undo(todayKey()), true);
+    let [kgx] = store.getUsageForDate(todayKey());
+    assertEqual(kgx.seconds, 1800, 'shell is back, repo-a stays deleted (one level of undo)');
+    assert('shell' in kgx.children);
+    assertEqual(store.canUndo(todayKey()), false);
+    assertEqual(store.undo(todayKey()), false);
+    assertEqual(changed, 1);
+    store.destroy();
+});
+
+test('undo: is per day and survives an unrelated addTime on another day', async () => {
+    let old = dateKey(GLib.DateTime.new_now_local().add_days(-1));
+    let store = await freshStore(new FakeSettings(), {
+        [old]: { app: { displayName: 'App', seconds: 500 } },
+    });
+    store.setDirectSeconds(old, ['app'], 100);
+    store.addTime(['x'], ['X'], 5);
+    assertEqual(store.canUndo(todayKey()), false);
+    assertEqual(store.canUndo(old), true);
+    store.undo(old);
+    assertEqual(store.getUsageForDate(old)[0].seconds, 500);
+    store.destroy();
+});
