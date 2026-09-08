@@ -20,6 +20,7 @@ const FILES = [
     './usageStore.test.js',
     './activitySources.test.js',
     './rules.test.js',
+    './framing.test.js',
 ];
 
 // Deletes the usage.json (and its parent dirs) that UsageStore wrote under
