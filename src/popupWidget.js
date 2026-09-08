@@ -223,7 +223,7 @@ export class PopupWidget {
             style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';',
         }));
         titles.add_child(new St.Label({
-            text: this._percentBasis() === 'largest' ? '% of largest' : '% of total',
+            text: this._percentBasis() === 'largest' ? 'bars: of largest' : 'bars: of total',
             opacity: DIM_OPACITY,
             style: 'font-size: 9px; color: ' + CARD_FG + ';',
         }));
@@ -279,7 +279,8 @@ export class PopupWidget {
             let row = makeExpandableRow({
                 name: `Other ${restCount} ${NOUNS[depth]}`,
                 seconds: restSeconds,
-                pct: pctOf(restSeconds, basis),
+                pct: pctOf(restSeconds, parentTotal),
+                barPct: pctOf(restSeconds, basis),
                 color: COLORS[top.length % COLORS.length],
                 depth,
                 dim: true,
@@ -303,7 +304,8 @@ export class PopupWidget {
             let row = this._addLeaf({
                 name: 'No breakdown',
                 seconds: direct,
-                pct: pctOf(direct, basis),
+                pct: pctOf(direct, parentTotal),
+                barPct: pctOf(direct, basis),
                 color: COLORS[(top.length + 1) % COLORS.length],
                 depth,
                 dim: true,
@@ -343,7 +345,8 @@ export class PopupWidget {
         let opts = {
             name: entry.displayName,
             seconds: entry.seconds,
-            pct: pctOf(entry.seconds, basis),
+            pct: pctOf(entry.seconds, parentTotal),
+            barPct: pctOf(entry.seconds, basis),
             color,
             depth,
         };
