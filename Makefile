@@ -63,6 +63,12 @@ reload: build
 	echo "Loaded $$new (state: $${state:-unknown})"; \
 	echo "Errors, if any: journalctl --user -o cat -b 0 /usr/bin/gnome-shell | grep -A5 $$new | tail -20"
 
+# Back to the production copy: disable and remove the dev copy, re-enable UUID.
+unreload:
+	@prev=$$(cat $(DEV_UUID_FILE) 2>/dev/null); \
+	if [ -n "$$prev" ]; then gnome-extensions disable $$prev 2>/dev/null; rm -rf $(EXTENSIONS_DIR)/$$prev; rm -f $(DEV_UUID_FILE); echo "Removed $$prev"; fi; \
+	gnome-extensions enable $(UUID) && echo "Enabled $(UUID)"
+
 uninstall:
 	@rm -rf $(EXTENSION_DIR)
 	@echo "Uninstalled $(UUID)."
