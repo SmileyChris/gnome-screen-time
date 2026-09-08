@@ -139,3 +139,49 @@ test('ZellijSource: a missing binary disables the source for the session', async
     assertEqual(await z.resolve({ get_title: () => 's | t' }), null);
     z.destroy();
 });
+
+test('ZellijSource: _argv passes the session as --session=, never a positional value', () => {
+    let z = new ZellijSource();
+    assertEqual(z._argv('s'), ['zellij', '--session=s', 'action', 'dump-layout']);
+    z.destroy();
+});
+
+test('ZellijSource: a session token starting with "-" resolves to null and never spawns', async () => {
+    let z = new ZellijSource();
+    z._dumpLayout = async () => { throw new Error('must not spawn'); };
+    assertEqual(await z.resolve({ get_title: () => '--help | x' }), null);
+    z.destroy();
+});
+
+test('ZellijSource: an implausibly long session token resolves to null and never spawns', async () => {
+    let z = new ZellijSource();
+    z._dumpLayout = async () => { throw new Error('must not spawn'); };
+    let title = 'a'.repeat(200) + ' | x';
+    assertEqual(await z.resolve({ get_title: () => title }), null);
+    z.destroy();
+});
+
+test('ZellijSource: an empty command string is treated as no command', async () => {
+    let z = new ZellijSource();
+    z._dumpLayout = async () => `layout {
+    tab name="t" focus=true {
+        pane command="" cwd="dev/x" focus=true
+    }
+}`;
+    assertEqual(await z.resolve({ get_title: () => 's | t' }), {
+        activityId: 'shell', activityName: 'shell', detailId: 'x', detailName: 'x',
+    });
+    z.destroy();
+});
+
+test('ZellijSource: a detail directory named __other__ does not merge into the fold node', async () => {
+    let z = new ZellijSource();
+    z._dumpLayout = async () => `layout {
+    tab name="t" focus=true {
+        pane command="claude" cwd="dev/__other__" focus=true
+    }
+}`;
+    let sub = await z.resolve({ get_title: () => 's | t' });
+    assertEqual(sub.detailId, '_other_');
+    z.destroy();
+});
