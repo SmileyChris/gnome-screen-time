@@ -20,6 +20,12 @@
       <summary>Idle timeout (seconds)</summary>
       <description>Stop counting after this long without keyboard or mouse input, even while the screen stays on. Time up to the timeout is still counted. 0 disables idle detection.</description>
     </key>
+    <key name="percent-basis" type="s">
+      <choices><choice value="total"/><choice value="largest"/></choices>
+      <default>"total"</default>
+      <summary>What row percentages and bars are relative to</summary>
+      <description>"total" compares each row with its parent's total (the day for apps); "largest" compares with the biggest row at that level, so the top item reads 100%. Toggled by clicking the total card in the popup.</description>
+    </key>
     <key name="purge-requested" type="i">
       <default>0</default>
       <summary>Manual purge trigger</summary>
