@@ -10,8 +10,10 @@ HOST_SCRIPT     = $(abspath companion/host/screen-time-host.js)
 HOST_MANIFEST   = org.gnome.shell.extensions.screen_time.json
 BRAVE_HOSTS_DIR = $(HOME)/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts
 ZEN_HOSTS_DIR   = $(HOME)/.mozilla/native-messaging-hosts
+EXTENSIONS_DIR  = $(HOME)/.local/share/gnome-shell/extensions
+DEV_UUID_FILE   = $(DIST_DIR)/.dev-uuid
 
-.PHONY: all build schemas install uninstall pack companion-build companion-install companion-uninstall lint check test clean restart
+.PHONY: all build schemas install uninstall reload unreload pack companion-build companion-install companion-uninstall lint check test clean restart
 
 all: build
 
@@ -29,6 +31,37 @@ install: build
 	@cp -r $(SRC_DIR)/* $(EXTENSION_DIR)/
 	@echo "Installed to $(EXTENSION_DIR)"
 	@echo "Reload GNOME Shell: log out/in on Wayland, or Alt+F2 → 'r' on X11."
+
+# Live reload without logging out. GNOME 45+ caches an extension's ES modules
+# for the life of the Shell, so the same UUID can never pick up new code; a
+# fresh UUID has fresh module URLs and loads what is on disk now. The Shell
+# does not watch the extensions directory, so the new copy is handed to its
+# extension manager through org.gnome.Shell.Eval, which only answers while
+# Looking Glass's Unsafe Mode is on (Alt+F2, lg, toggle in the top bar).
+# Each run installs src/ under a new dev UUID, disables the production UUID
+# and the previous dev copy, and enables the new one. Both copies share the
+# schema and the usage file, so only one may be enabled at a time.
+reload: build
+	@mkdir -p $(DIST_DIR)
+	@prev=$$(cat $(DEV_UUID_FILE) 2>/dev/null); \
+	new=screen-time-dev-$$(date +%s)@gnome-screen-time; \
+	dir=$(EXTENSIONS_DIR)/$$new; tmp=$$(mktemp -d); \
+	cp -r $(SRC_DIR)/* $$tmp/ && \
+	python3 -c 'import json,sys; p,u=sys.argv[1:3]; m=json.load(open(p)); m["uuid"]=u; m["name"]+=" (dev)"; json.dump(m,open(p,"w"),indent=4)' $$tmp/metadata.json $$new && \
+	mv $$tmp $$dir && \
+	gnome-extensions disable $(UUID) 2>/dev/null || true; \
+	if [ -n "$$prev" ]; then gnome-extensions disable $$prev 2>/dev/null; rm -rf $(EXTENSIONS_DIR)/$$prev; fi; \
+	js="const M = Main.extensionManager; const ext = M.createExtensionObject('$$new', Gio.File.new_for_path('$$dir'), ExtensionUtils.ExtensionType.PER_USER); M.loadExtension(ext).then(() => M.enableExtension('$$new')).catch(e => logError(e, 'reload')); 'queued'"; \
+	out=$$(gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "$$js" 2>&1); \
+	case "$$out" in \
+	  *true*) ;; \
+	  "(false, '')") echo "Shell refused Eval. Enable Unsafe Mode once per login: Alt+F2, type lg, click the Unsafe Mode toggle in Looking Glass's top bar. Then rerun make reload."; rm -rf $$dir; gnome-extensions enable $(UUID); exit 1;; \
+	  *) echo "Eval failed: $$out"; rm -rf $$dir; gnome-extensions enable $(UUID); exit 1;; \
+	esac; \
+	sleep 1; state=$$(gnome-extensions info $$new 2>/dev/null | sed -n 's/^ *State: //p'); \
+	echo $$new > $(DEV_UUID_FILE); \
+	echo "Loaded $$new (state: $${state:-unknown})"; \
+	echo "Errors, if any: journalctl --user -o cat -b 0 /usr/bin/gnome-shell | grep -A5 $$new | tail -20"
 
 uninstall:
 	@rm -rf $(EXTENSION_DIR)

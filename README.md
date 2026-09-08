@@ -89,6 +89,8 @@ assets/     screenshots
 ```bash
 make            # compile the GSettings schema
 make install    # install to ~/.local/share/gnome-shell/extensions/
+make reload     # load src/ into the running Shell under a fresh dev UUID (no logout)
+make unreload   # back to the installed production copy
 make uninstall
 make check      # syntax-check every module + validate metadata.json and the companion manifests
 make test       # unit tests under plain gjs (tests/)
@@ -99,6 +101,8 @@ make companion-install    # register its native host with both browsers
 ```
 
 `make check` uses `gjs -m`. Note that `gjs -c` runs a string and does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.
+
+GNOME 45+ caches an extension's modules for the life of the Shell, so re-enabling never picks up new code and Wayland cannot restart the Shell in place. `make reload` sidesteps both: it copies `src/` under a new dev UUID, disables the production copy, and asks the running Shell to load the new one through `org.gnome.Shell.Eval`. Eval answers only while Looking Glass's Unsafe Mode is on (Alt+F2, `lg`, the toggle in its top bar), once per login; turn it off when you are done iterating. `make unreload` removes the dev copy and re-enables the production UUID.
 
 Set `GNOME_SHELL_EXTENSION_SCREEN_TIME_DEBUG=1` in the Shell's environment (`systemctl --user set-environment ...`, then log in again) to log the resolved path on every focus change:
 
