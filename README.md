@@ -64,6 +64,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
 - There is **no idle detection** while the screen is still on. If you walk away without the screen blanking, that time is still counted.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
+- Inside a **terminal running zellij**, time is further broken down by the focused pane's command and working directory (for example `claude` in `gnome-screen-time`), read from `zellij action dump-layout`. Only the session name is read from the window title; the pane title is never stored. Terminals not running zellij, and terminals not on the built-in list, are tracked as a single app.
 
 ## Data
 
@@ -73,7 +74,7 @@ Usage is stored at:
 ~/.local/share/gnome-shell/screen-time/usage.json
 ```
 
-It is keyed by date, then by app. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
+It is keyed by date, then by app. An app may carry a `children` map (activity, then detail) when a breakdown source applies; the app's own `seconds` is always the total including its children, so older versions read the file as plain per-app data. Each parent keeps at most 20 named children per day; the rest fold into an `__other__` entry. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
 
 ## Development
 
@@ -88,11 +89,18 @@ make            # compile the GSettings schema
 make install    # install to ~/.local/share/gnome-shell/extensions/
 make uninstall
 make check      # syntax-check every module + validate metadata.json
+make test       # unit tests under plain gjs (tests/)
 make pack       # build dist/screen-time@gnome-screen-time.shell-extension.zip
 make clean
 ```
 
 `make check` uses `gjs -m`. Note that `gjs -c` runs a string and does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.
+
+Set `GNOME_SHELL_EXTENSION_SCREEN_TIME_DEBUG=1` in the Shell's environment (`systemctl --user set-environment ...`, then log in again) to log the resolved path on every focus change:
+
+```bash
+journalctl -f -o cat /usr/bin/gnome-shell | grep ScreenTime
+```
 
 The packaged archive is validated with [shexli](https://pypi.org/project/shexli/) before release:
 
