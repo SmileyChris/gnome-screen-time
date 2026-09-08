@@ -143,3 +143,115 @@ test('fold: level 1 is not capped', async () => {
     assertEqual(store.getUsageForDate(todayKey()).length, MAX_CHILDREN + 5);
     store.destroy();
 });
+
+function daysAgoKey(n) {
+    return dateKey(GLib.DateTime.new_now_local().add_days(-n));
+}
+
+test('load: a file written by the current version loads unchanged', async () => {
+    let today = todayKey();
+    let store = await freshStore(new FakeSettings(), {
+        [today]: {
+            'a.desktop': { displayName: 'A', seconds: 120 },
+            'b.desktop': { displayName: 'B', seconds: 30 },
+        },
+    });
+    assertEqual(store.getUsageForDate(today), [
+        { appId: 'a.desktop', displayName: 'A', seconds: 120, children: null },
+        { appId: 'b.desktop', displayName: 'B', seconds: 30, children: null },
+    ]);
+    // Adding a sub-path to a flat node grows children in place.
+    store.addTime(['a.desktop', 'x'], ['A', 'x'], 10);
+    let [a] = store.getUsageForDate(today);
+    assertEqual(a.seconds, 130);
+    assertEqual(sortedChildren(a.children), [
+        { id: 'x', displayName: 'x', seconds: 10, count: 0, children: null },
+    ]);
+    store.destroy();
+});
+
+test('load: nested file round-trips through save and load', async () => {
+    let today = todayKey();
+    let store = await freshStore();
+    store.addTime(['kgx', 'claude', 'repo'], ['Console', 'claude', 'repo'], 30);
+    store.destroy();   // saves
+
+    let onDisk = readStoreFile();
+    assertEqual(onDisk[today].kgx.children.claude.children.repo.seconds, 30);
+    assertEqual(onDisk[today].kgx.seconds, 30, 'old versions read level 1 as plain data');
+
+    let reloaded = new UsageStore(new FakeSettings());
+    await reloaded.loaded;
+    let [entry] = reloaded.getUsageForDate(today);
+    assertEqual(sortedChildren(sortedChildren(entry.children)[0].children)[0].id, 'repo');
+    reloaded.destroy();
+});
+
+test('merge: time tracked before the read lands is added under nested data', async () => {
+    let today = todayKey();
+    GLib.unlink(STORE_FILE);
+    Gio.File.new_for_path(STORE_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({
+            [today]: {
+                kgx: {
+                    displayName: 'Console', seconds: 100,
+                    children: {
+                        claude: {
+                            displayName: 'claude', seconds: 100,
+                            children: { repo: { displayName: 'repo', seconds: 100 } },
+                        },
+                    },
+                },
+            },
+        })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let store = new UsageStore(new FakeSettings());
+    // Before `loaded` resolves: simulates the tracker firing during the read.
+    store.addTime(['kgx', 'claude', 'repo'], ['Console', 'claude', 'repo'], 5);
+    store.addTime(['kgx', 'shell'], ['Console', 'shell'], 2);
+    await store.loaded;
+
+    let [entry] = store.getUsageForDate(today);
+    assertEqual(entry.seconds, 107);
+    let l2 = sortedChildren(entry.children);
+    assertEqual(l2.map(c => [c.id, c.seconds]), [['claude', 105], ['shell', 2]]);
+    assertEqual(sortedChildren(l2[0].children)[0].seconds, 105);
+    store.destroy();
+});
+
+test('retention: old nested days are dropped, today kept intact', async () => {
+    let today = todayKey();
+    let old = daysAgoKey(30);
+    let nested = {
+        displayName: 'Console', seconds: 50,
+        children: { claude: { displayName: 'claude', seconds: 50 } },
+    };
+    let store = await freshStore(new FakeSettings({ 'retention-days': 7 }), {
+        [old]: { kgx: nested },
+        [today]: { kgx: nested },
+    });
+    assertEqual(store.getUsageForDate(old), []);
+    assertEqual(store.getOldestDate(), today);
+    assertEqual(sortedChildren(store.getUsageForDate(today)[0].children)[0].seconds, 50);
+    store.destroy();
+});
+
+test('purge: purge-requested deletes days older than 7 over nested data', async () => {
+    let today = todayKey();
+    let settings = new FakeSettings({ 'retention-days': 90 });
+    let store = await freshStore(settings, {
+        [daysAgoKey(10)]: { kgx: { displayName: 'Console', seconds: 5,
+            children: { x: { displayName: 'x', seconds: 5 } } } },
+        [daysAgoKey(3)]: { kgx: { displayName: 'Console', seconds: 6 } },
+        [today]: { kgx: { displayName: 'Console', seconds: 7 } },
+    });
+    let changed = 0;
+    store.onChange = () => changed++;
+    settings.emit('changed::purge-requested');
+    assertEqual(store.getOldestDate(), daysAgoKey(3));
+    assertEqual(changed, 1);
+    assertEqual(Object.keys(readStoreFile()).sort(), [daysAgoKey(3), today].sort(),
+        'purge saves immediately');
+    store.destroy();
+});

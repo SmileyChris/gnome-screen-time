@@ -80,6 +80,23 @@ function foldSmallest(siblings) {
     delete siblings[smallestId];
 }
 
+// Adds `from` into `into`, recursing into children. Used once per load to
+// fold the on-disk totals under time tracked while the read was in flight.
+function mergeNode(into, from) {
+    into.seconds += from.seconds;
+    if (from.count)
+        into.count = (into.count ?? 0) + from.count;
+    if (!from.children)
+        return;
+    into.children ??= {};
+    for (let [id, node] of Object.entries(from.children)) {
+        if (into.children[id])
+            mergeNode(into.children[id], node);
+        else
+            into.children[id] = node;
+    }
+}
+
 // Adds seconds to siblings[id], creating it if needed. `cap` is null for
 // level 1 (apps were never capped) and MAX_CHILDREN below it.
 function creditNode(siblings, id, displayName, seconds, cap) {
@@ -161,7 +178,7 @@ export class UsageStore {
             // stored totals on top of it.
             for (let [appId, info] of Object.entries(apps)) {
                 if (day[appId])
-                    day[appId].seconds += info.seconds;
+                    mergeNode(day[appId], info);
                 else
                     day[appId] = info;
             }
