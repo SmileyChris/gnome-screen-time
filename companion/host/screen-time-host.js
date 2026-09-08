@@ -33,14 +33,15 @@ function log(msg) {
 function isReport(m) {
     return m && typeof m === 'object' &&
         typeof m.browser === 'string' && BROWSERS.includes(m.browser) &&
-        typeof m.host === 'string' && typeof m.detail === 'string';
+        typeof m.host === 'string' && typeof m.detail === 'string' &&
+        typeof m.focused === 'boolean';
 }
 
 function forward(report) {
     try {
         Gio.DBus.session.call_sync(
             BUS_NAME, OBJECT_PATH, INTERFACE, 'ReportActiveTab',
-            new GLib.Variant('(sss)', [report.browser, report.host, report.detail]),
+            new GLib.Variant('(sssb)', [report.browser, report.host, report.detail, report.focused]),
             null, Gio.DBusCallFlags.NONE, CALL_TIMEOUT_MS, null);
     } catch (e) {
         let now = Date.now();

@@ -14,7 +14,7 @@ const HEALTHY_PORT_MS = 10000;
 
 let port = null;
 let connectedAt = 0;
-let lastSent = null;      // "host\0detail" of the last report that went out
+let lastSent = null;      // "host\0detail\0focused" of the last report that went out
 let retryMs = RETRY_MIN_MS;
 let retryTimer = null;
 
@@ -71,17 +71,20 @@ async function currentReport() {
         console.error(`[screen-time] windows.getLastFocused failed: ${e.message}`);
         return EMPTY_REPORT;
     }
-    if (!win || !win.focused)
-        return EMPTY_REPORT;   // the browser itself is not the focused app
+    if (!win)
+        return { ...EMPTY_REPORT, focused: false };
+    // The site is reported even while the browser is not the focused app,
+    // so the Shell can show it; only focused time is ever credited.
+    let focused = win.focused === true;
     let tab = win.tabs?.find(t => t.active);
     if (!tab || !tab.url)
-        return EMPTY_REPORT;
-    return reportFor(tab.url, win.incognito === true);
+        return { ...EMPTY_REPORT, focused };
+    return { ...reportFor(tab.url, win.incognito === true), focused };
 }
 
 async function report() {
     let r = await currentReport();
-    let key = `${r.host}\0${r.detail}`;
+    let key = `${r.host}\0${r.detail}\0${r.focused}`;
     if (key === lastSent)
         return;
     if (!connect()) {
@@ -91,7 +94,7 @@ async function report() {
     }
     let p = port;
     try {
-        p.postMessage({ browser: BROWSER, host: r.host, detail: r.detail });
+        p.postMessage({ browser: BROWSER, host: r.host, detail: r.detail, focused: r.focused });
         lastSent = key;
     } catch (e) {
         console.error(`[screen-time] postMessage failed: ${e.message}`);

@@ -232,7 +232,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.DBus.session.call(
                 'org.gnome.Shell', '/org/gnome/Shell/Extensions/ScreenTime',
                 'org.gnome.Shell.Extensions.ScreenTime', 'GetCompanions',
-                null, new GLib.VariantType('(a(ssb))'), Gio.DBusCallFlags.NONE, 1000, null,
+                null, new GLib.VariantType('(a(ssbb))'), Gio.DBusCallFlags.NONE, 1000, null,
                 (conn, res) => {
                     let list;
                     try {
@@ -242,14 +242,16 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                             row.subtitle = 'Screen Time extension is not running';
                         return;
                     }
-                    for (const [id, host, connected] of list) {
+                    for (const [id, host, connected, focused] of list) {
                         const row = rows.get(id);
                         if (!row)
                             continue;
                         if (!connected)
                             row.subtitle = 'Not connected. Load the companion extension in this browser.';
+                        else if (!host)
+                            row.subtitle = 'Connected, no web page in the active tab';
                         else
-                            row.subtitle = host ? `Connected, on ${host}` : 'Connected, no site in focus';
+                            row.subtitle = focused ? `Connected, on ${host}` : `Connected, on ${host} (window not focused)`;
                     }
                 });
         };

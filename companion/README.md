@@ -15,7 +15,7 @@ generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`
   bitbucket.org; `r/<sub>` on reddit.com and old.reddit.com; the first path
   segment elsewhere. Segments are URL-decoded and cut at 64 characters.
 
-Private windows, non-web schemes and an unfocused browser send empty strings.
+Private windows and non-web schemes send empty strings. An unfocused browser still sends its site with `focused: false`; the Shell shows it in preferences but credits time only while focused.
 The URL, title, query string and fragment never leave the browser.
 
 ## Contract
@@ -25,9 +25,9 @@ The native host (`host/screen-time-host.js`, gjs) calls, on the session bus:
     destination  org.gnome.Shell
     object       /org/gnome/Shell/Extensions/ScreenTime
     interface    org.gnome.Shell.Extensions.ScreenTime
-    method       ReportActiveTab(s browser, s host, s detail) -> ()
+    method       ReportActiveTab(s browser, s host, s detail, b focused) -> ()
 
-    method       GetCompanions() -> a(ssb)   (browser, current site, connected)
+    method       GetCompanions() -> a(ssbb)   (browser, current site, connected, focused)
 
 Empty `host` means no breakdown. The extension watches the caller's unique
 bus name and clears that browser's state when it vanishes, so closing the

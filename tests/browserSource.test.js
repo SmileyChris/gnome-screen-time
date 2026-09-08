@@ -97,8 +97,20 @@ test('browserSource: getState mirrors the last report per browser', () => {
     let s = new BrowserSource();
     assertEqual(s.getState('brave'), null);
     s.setState('brave', 'github.com', 'a/b');
-    assertEqual(s.getState('brave'), { host: 'github.com', detail: 'a/b' });
+    assertEqual(s.getState('brave'), { host: 'github.com', detail: 'a/b', focused: true });
     s.setState('brave', '', '');
     assertEqual(s.getState('brave'), null);
     assertEqual(s.getState('nope'), null);
+});
+
+test('browserSource: an unfocused report is kept for display but not credited', async () => {
+    let s = new BrowserSource();
+    let fired = 0;
+    s.onChange = () => fired++;
+    s.setState('chrome', 'docs.example.com', 'guide', false);
+    assertEqual(s.getState('chrome'), { host: 'docs.example.com', detail: 'guide', focused: false });
+    assertEqual(await s.resolve({}, 'google-chrome.desktop'), null);
+    assertEqual(s.setState('chrome', 'docs.example.com', 'guide', true), true, 'focus change is a change');
+    assertEqual((await s.resolve({}, 'google-chrome.desktop')).activityId, 'docs.example.com');
+    assertEqual(fired, 2);
 });

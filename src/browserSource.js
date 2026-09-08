@@ -20,7 +20,7 @@ export const MAX_ID_LENGTH = 256;
 // state actually changes so the tracker can re-credit immediately.
 export class BrowserSource {
     constructor() {
-        this._state = new Map();   // browser -> { host, detail } | null
+        this._state = new Map();   // browser -> { host, detail, focused } | null
         this.onChange = null;
     }
 
@@ -28,8 +28,10 @@ export class BrowserSource {
         return Object.hasOwn(BROWSER_APP_IDS, appId);
     }
 
-    // Empty or null `host` means no breakdown. Returns whether anything changed.
-    setState(browser, host, detail) {
+    // Empty or null `host` means no breakdown. `focused` is the browser's own
+    // window focus; the site is kept either way, for display, but only credited
+    // while focused. Returns whether anything changed.
+    setState(browser, host, detail, focused = true) {
         if (!BROWSERS.includes(browser))
             return false;
         let next = null;
@@ -42,10 +44,11 @@ export class BrowserSource {
                 h = '_other_';
             if (d === OTHER_KEY)
                 d = '_other_';
-            next = { host: h, detail: d };
+            next = { host: h, detail: d, focused: focused === true };
         }
         let prev = this._state.get(browser) ?? null;
-        if (prev?.host === next?.host && prev?.detail === next?.detail && (prev === null) === (next === null))
+        if (prev?.host === next?.host && prev?.detail === next?.detail &&
+            prev?.focused === next?.focused && (prev === null) === (next === null))
             return false;
         this._state.set(browser, next);
         this.onChange?.(browser);
@@ -56,7 +59,7 @@ export class BrowserSource {
         return this.setState(browser, null, null);
     }
 
-    // The last report for a browser as {host, detail}, or null when it has
+    // The last report for a browser as {host, detail, focused}, or null when it has
     // none (no breakdown, or never reported).
     getState(browser) {
         return this._state.get(browser) ?? null;
@@ -65,7 +68,7 @@ export class BrowserSource {
     resolve(win, appId) {
         let browser = BROWSER_APP_IDS[appId];
         let s = browser ? this._state.get(browser) : null;
-        if (!s)
+        if (!s || !s.focused)
             return Promise.resolve(null);
         return Promise.resolve({
             activityId: s.host, activityName: s.host,

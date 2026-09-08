@@ -10,9 +10,10 @@ const INTERFACE_XML = `
       <arg type="s" direction="in" name="browser"/>
       <arg type="s" direction="in" name="host"/>
       <arg type="s" direction="in" name="detail"/>
+      <arg type="b" direction="in" name="focused"/>
     </method>
     <method name="GetCompanions">
-      <arg type="a(ssb)" direction="out" name="companions"/>
+      <arg type="a(ssbb)" direction="out" name="companions"/>
     </method>
   </interface>
 </node>`;
@@ -32,7 +33,7 @@ export class DbusService {
     // gjs routes a method named `<Method>Async` the raw parameters and the
     // invocation, which is how the sender's unique name is read.
     ReportActiveTabAsync(params, invocation) {
-        let [browser, host, detail] = params;
+        let [browser, host, detail, focused] = params;
         if (!BROWSERS.includes(browser)) {
             let name = String(browser).slice(0, MAX_ID_LENGTH);
             console.debug(`[ScreenTime] ignoring report for unknown browser ${name}`);
@@ -45,20 +46,20 @@ export class DbusService {
         this._watch(invocation.get_sender(), browser);
         invocation.return_value(null);
         try {
-            this._source.setState(browser, host, detail);
+            this._source.setState(browser, host, detail, focused);
         } catch (e) {
             console.error(`[ScreenTime] report handling failed: ${e.message}`);
         }
     }
 
     // Read-only status for the preferences window: one tuple per known
-    // browser with its current site (or empty) and whether a native host is
-    // connected for it right now.
+    // browser with its current site (or empty), whether a native host is
+    // connected for it right now, and whether that browser's window has focus.
     GetCompanions() {
         return BROWSERS.map(browser => {
             let connected = [...this._watches.values()].some(w => w.browser === browser);
             let state = this._source?.getState(browser);
-            return [browser, state?.host ?? '', connected];
+            return [browser, state?.host ?? '', connected, state?.focused ?? false];
         });
     }
 
