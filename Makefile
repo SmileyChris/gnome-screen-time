@@ -5,8 +5,9 @@ SRC_DIR       = src
 SCHEMAS_DIR   = $(SRC_DIR)/schemas
 DIST_DIR      = dist
 PACK_FILE     = $(DIST_DIR)/$(UUID).shell-extension.zip
+COMPANION_TOOL = python3 companion/tools/build.py
 
-.PHONY: all build schemas install uninstall pack lint check test clean restart
+.PHONY: all build schemas install uninstall pack companion-build lint check test clean restart
 
 all: build
 
@@ -40,6 +41,11 @@ pack:
 	@# The zip is a binary distribution of GPL source, so it carries its licence.
 	@zip -q -j $(PACK_FILE) LICENSE
 	@echo "Packed: $(PACK_FILE)"
+
+# Browser companion: one WebExtension source, built for Brave (unpacked
+# directory plus zip) and Zen (xpi). Never part of `pack`.
+companion-build:
+	@$(COMPANION_TOOL) build
 
 # Syntax-check every module. `gjs -c` runs a string and does NOT check syntax;
 # `gjs -m` does. Import errors for resource:///org/gnome/... and missing Shell

@@ -9,3 +9,7 @@ docs/*
 dist/
 src/schemas/*.compiled
 *.zip
+
+# browser companion: generated locally, never committed
+companion/webext/chromium-key.pem
+companion/webext/browser-id.js
