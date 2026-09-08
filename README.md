@@ -64,7 +64,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
 - There is **no idle detection** while the screen is still on. If you walk away without the screen blanking, that time is still counted.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
-- Inside a **terminal running zellij**, time is further broken down by the focused pane's command and working directory (for example `claude` in `gnome-screen-time`), read from `zellij action dump-layout`. Only the session name is read from the window title; the pane title is never stored. Terminals not running zellij, and terminals not on the built-in list, are tracked as a single app.
+- Inside a **terminal running zellij**, time is further broken down by the focused pane's command and working directory (for example `claude` in `gnome-screen-time`), read from `zellij action dump-layout`. Only the session name is read from the window title; the pane title is never stored. Terminals not running zellij, and terminals not on the built-in list, are tracked as a single app. The zellij binary must be on GNOME Shell's PATH (a systemd user session often lacks ~/.cargo/bin and ~/.local/bin); if it is not found, terminals are tracked as a single app.
 
 ## Data
 
