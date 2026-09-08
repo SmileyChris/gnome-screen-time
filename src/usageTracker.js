@@ -119,7 +119,7 @@ export class UsageTracker {
             if (seq !== this._resolveSeq || this._away || !this._path)
                 return;
             this._applySubPath(sub);
-        });
+        }).catch(e => console.error(`[ScreenTime] resolve apply failed: ${e.message}`));
     }
 
     // Switches to the resolved sub-path. Time since the last flush belongs to
