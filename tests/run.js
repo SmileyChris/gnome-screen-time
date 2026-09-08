@@ -11,6 +11,7 @@ GLib.setenv('XDG_DATA_HOME', tmp, true);
 const FILES = [
     './zellijLayout.test.js',
     './usageStore.test.js',
+    './activitySources.test.js',
 ];
 
 let loop = new GLib.MainLoop(null, false);
