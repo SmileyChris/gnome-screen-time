@@ -112,11 +112,24 @@ export class ZellijSource {
 
 // Picks the source that claims an app and debounces its resolves per window.
 // Callers inside the debounce window get the cached (possibly still pending)
-// promise, so concurrent askers never trigger a second spawn.
+// promise, so concurrent askers never trigger a second spawn. A source that
+// pushes state (the browser companion) reports changes through `onChange`;
+// the registry drops its cache so the next resolve sees the new state, and
+// forwards the event to the tracker.
 export class ActivitySourceRegistry {
     constructor(sources = [new ZellijSource()]) {
         this._sources = sources;
         this._recent = new WeakMap();   // win -> { at, promise }
+        this.onChange = null;
+        for (let s of sources) {
+            if ('onChange' in s)
+                s.onChange = () => this._onSourceChanged();
+        }
+    }
+
+    _onSourceChanged() {
+        this._recent = new WeakMap();
+        this.onChange?.();
     }
 
     resolve(win, appId, now = Date.now()) {
@@ -128,7 +141,7 @@ export class ActivitySourceRegistry {
         if (recent && now - recent.at < DEBOUNCE_MS)
             return recent.promise;
 
-        let promise = source.resolve(win).catch(e => {
+        let promise = source.resolve(win, appId).catch(e => {
             console.error(`[ScreenTime] activity resolve failed: ${e.message}`);
             return null;
         });
@@ -140,5 +153,6 @@ export class ActivitySourceRegistry {
         for (let s of this._sources)
             s.destroy?.();
         this._sources = [];
+        this.onChange = null;
     }
 }

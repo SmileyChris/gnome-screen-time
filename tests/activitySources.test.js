@@ -185,3 +185,26 @@ test('ZellijSource: a detail directory named __other__ does not merge into the f
     assertEqual(sub.detailId, '_other_');
     z.destroy();
 });
+
+test('registry: passes the app id to the source', async () => {
+    let seen = null;
+    let src = new FakeSource(SUB);
+    src.resolve = async (win, appId) => { seen = appId; return SUB; };
+    let reg = new ActivitySourceRegistry([src]);
+    await reg.resolve({}, 'term.desktop');
+    assertEqual(seen, 'term.desktop');
+});
+
+test('registry: a source change drops the debounce cache and fans out', async () => {
+    let src = new FakeSource(SUB);
+    src.onChange = null;
+    let reg = new ActivitySourceRegistry([src]);
+    let fired = 0;
+    reg.onChange = () => fired++;
+    let win = {};
+    await reg.resolve(win, 'term.desktop', 1000);
+    src.onChange('term');
+    assertEqual(fired, 1);
+    await reg.resolve(win, 'term.desktop', 1001);
+    assertEqual(src.calls, 2, 'resolved again despite the debounce window');
+});
