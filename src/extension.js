@@ -4,6 +4,9 @@ import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore } from './usageStore.js';
 import { LimitNotifier } from './limitNotifier.js';
+import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
+import { BrowserSource } from './browserSource.js';
+import { DbusService } from './dbusService.js';
 
 export default class ScreenTimeExtension extends Extension {
     enable() {
@@ -14,7 +17,13 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator.addToPanel(this.uuid);
         this._popup = new PopupWidget(this._indicator.menu, this._store,
             this._settings, () => this.openPreferences());
-        this._tracker = new UsageTracker(this._store, this._settings);
+
+        // The browser companion pushes into this source over D-Bus; the same
+        // instance sits in the registry the tracker reads from.
+        let browserSource = new BrowserSource();
+        this._dbus = new DbusService(browserSource);
+        this._tracker = new UsageTracker(this._store, this._settings,
+            new ActivitySourceRegistry([new ZellijSource(), browserSource]));
         this._limitNotifier = new LimitNotifier(this._settings);
 
         this._store.onChange = (appId, displayName, seconds) => {
@@ -36,8 +45,10 @@ export default class ScreenTimeExtension extends Extension {
 
     disable() {
         this._settings.disconnectObject(this);
-        this._tracker?.destroy();
+        this._tracker?.destroy();      // destroys the registry and its sources
         this._tracker = null;
+        this._dbus?.destroy();
+        this._dbus = null;
         this._popup?.destroy();
         this._popup = null;
         this._indicator?.destroy();

@@ -18,6 +18,10 @@ export class UsageTracker {
         this._store = store;
         this._settings = settings;
         this._sources = sources;
+        // A push source (browser companion) changed state: re-credit now
+        // rather than at the next tick, so a tab switch lands within
+        // resolve latency like a pane switch does.
+        this._sources.onChange = () => this._refresh();
         this._lastTime = Date.now();
 
         // Where time is being credited right now: [appId], [appId, activityId]
@@ -184,14 +188,20 @@ export class UsageTracker {
         this._setCurrent(this._currentApp(), now);
     }
 
+    // Banks the interval so far and asks the sources again. Used by the 30s
+    // tick and by a source announcing a change.
+    _refresh() {
+        if (this._away || !this._path)
+            return;
+        let now = Date.now();
+        this._flush(now);
+        this._lastTime = now;
+        // The pane or tab may have changed without a focus event.
+        this._kickResolve();
+    }
+
     _onFlushTick() {
-        if (!this._away && this._path) {
-            let now = Date.now();
-            this._flush(now);
-            this._lastTime = now;
-            // The pane may have changed without a focus event.
-            this._kickResolve();
-        }
+        this._refresh();
         return GLib.SOURCE_CONTINUE;
     }
 
@@ -218,6 +228,7 @@ export class UsageTracker {
         }
         this._flush(Date.now());
         this._resolveSeq++;   // drop any resolve still in flight
+        this._sources.onChange = null;
         this._sources.destroy();
         this._sources = null;
         this._win = null;
