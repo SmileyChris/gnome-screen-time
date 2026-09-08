@@ -44,10 +44,12 @@ pack:
 # Syntax-check every module. `gjs -c` runs a string and does NOT check syntax;
 # `gjs -m` does. Import errors for resource:///org/gnome/... and missing Shell
 # typelibs are expected outside a live Shell, so only SyntaxError counts.
+# stdin comes from /dev/null because this runs each module: the native
+# messaging host reads stdin until it closes, and would otherwise block here.
 check:
 	@fail=0; \
 	for f in $(SRC_DIR)/*.js $(wildcard companion/webext/*.js) $(wildcard companion/host/*.js); do \
-		if gjs -m "$$f" 2>&1 | grep -qi "SyntaxError"; then \
+		if gjs -m "$$f" < /dev/null 2>&1 | grep -qi "SyntaxError"; then \
 			echo "SyntaxError in $$f"; fail=1; \
 		fi; \
 	done; \
