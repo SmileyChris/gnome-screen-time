@@ -65,6 +65,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 - There is **no idle detection** while the screen is still on. If you walk away without the screen blanking, that time is still counted.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
 - Inside a **terminal running zellij**, time is further broken down by the focused pane's command and working directory (for example `claude` in `gnome-screen-time`), read from `zellij action dump-layout`. Only the session name is read from the window title; the pane title is never stored. Terminals not running zellij, and terminals not on the built-in list, are tracked as a single app. The zellij binary must be on GNOME Shell's PATH (a systemd user session often lacks ~/.cargo/bin and ~/.local/bin); if it is not found, terminals are tracked as a single app. Zellij sets the window title only when the focused pane's title changes, so a terminal that has just attached to an idle session stays at the app level until something in that pane retitles it.
+- In **Brave and Zen**, with the companion WebExtension installed (see `companion/README.md`), time is further broken down by site and, for code hosts and reddit, by repository or subreddit. Only the site and one path section leave the browser, over a local native-messaging host into the extension. Private windows are counted as the browser alone.
 
 ## Data
 
@@ -92,6 +93,8 @@ make check      # syntax-check every module + validate metadata.json
 make test       # unit tests under plain gjs (tests/)
 make pack       # build dist/screen-time@gnome-screen-time.shell-extension.zip
 make clean
+make companion-build      # build the browser companion for Brave and Zen
+make companion-install    # register its native host with both browsers
 ```
 
 `make check` uses `gjs -m`. Note that `gjs -c` runs a string and does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.

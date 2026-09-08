@@ -1,0 +1,50 @@
+# Browser companion
+
+Reports the focused window's active tab to the GNOME Screen Time extension so
+browser time breaks down by site (activity) and a site unit (detail), for
+example `github.com / anthropics/claude-code`.
+
+## What leaves the browser
+
+Only `{browser, host, detail}`, computed in `webext/rules.js`:
+
+- `browser`: `brave` or `zen`, a build-time constant.
+- `host`: hostname, lowercased, one leading `www.` removed.
+- `detail`: `owner/repo` on github.com, gitlab.com, codeberg.org and
+  bitbucket.org; `r/<sub>` on reddit.com and old.reddit.com; the first path
+  segment elsewhere. Segments are URL-decoded and cut at 64 characters.
+
+Private windows, non-web schemes and an unfocused browser send empty strings.
+The URL, title, query string and fragment never leave the browser.
+
+## Contract
+
+The native host (`host/screen-time-host.js`, gjs) calls, on the session bus:
+
+    destination  org.gnome.Shell
+    object       /org/gnome/Shell/Extensions/ScreenTime
+    interface    org.gnome.Shell.Extensions.ScreenTime
+    method       ReportActiveTab(s browser, s host, s detail) -> ()
+
+Empty `host` means no breakdown. The extension watches the caller's unique
+bus name and clears that browser's state when it vanishes, so closing the
+browser ends the breakdown immediately. The host answers `{"ping": true}`
+on stdin with `{"pong": true}` on stdout; `make companion-install` uses this
+as a smoke test.
+
+## Install
+
+    make companion-build      # dist/webext-brave/, dist/screen-time-brave.zip, dist/screen-time-zen.xpi
+    make companion-install    # host manifests for Brave and Zen, pointing at this checkout
+
+Brave: `brave://extensions`, enable Developer mode, Load unpacked,
+choose `dist/webext-brave`. The manifest carries a fixed `key`, so the id is
+stable and matches the host manifest.
+
+Zen: `about:config`, set `xpinstall.signatures.required` to `false`, then
+open `dist/screen-time-zen.xpi`. If Zen ignores the pref (release builds of
+Firefox do), load it temporarily from `about:debugging` for testing; a signed
+build through AMO's unlisted channel is the permanent route.
+
+`make companion-uninstall` removes the host manifests. Remove the extension
+from the browser separately.
