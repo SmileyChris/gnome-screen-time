@@ -61,7 +61,8 @@ function handle(message) {
         return;
     }
     if (!isReport(message)) {
-        log(`skipping unexpected message: ${JSON.stringify(message).slice(0, 80)}`);
+        // Keys only: the values could carry whatever a rogue sender wrote.
+        log(`skipping unexpected message with keys ${Object.keys(message).join(',')}`);
         return;
     }
     forward(message);

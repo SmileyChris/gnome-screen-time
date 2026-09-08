@@ -34,6 +34,9 @@ function connect() {
     }
     connectedAt = Date.now();
     p.onDisconnect.addListener(() => {
+        // A port we already replaced must not null out its successor.
+        if (port !== p)
+            return;
         // Host missing, crashed, or the Shell side is gone. Resend the
         // current state once we reconnect.
         let err = api.runtime.lastError?.message ?? p.error?.message;
@@ -86,11 +89,15 @@ async function report() {
         scheduleRetry();
         return;
     }
+    let p = port;
     try {
-        port.postMessage({ browser: BROWSER, host: r.host, detail: r.detail });
+        p.postMessage({ browser: BROWSER, host: r.host, detail: r.detail });
         lastSent = key;
     } catch (e) {
         console.error(`[screen-time] postMessage failed: ${e.message}`);
+        // Close the broken port so it cannot linger half-open. The
+        // onDisconnect guard above keeps its teardown off a replacement.
+        p.disconnect();
         port = null;
         lastSent = null;
         backOff();

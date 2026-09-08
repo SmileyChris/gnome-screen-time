@@ -20,6 +20,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 WEBEXT = os.path.join(ROOT, 'companion', 'webext')
 HOST = os.path.join(ROOT, 'companion', 'host', 'screen-time-host.js')
 DIST = os.path.join(ROOT, 'dist')
+# An allowlist, never a directory listing: chromium-key.pem lives in the same
+# directory as these sources and must never be copied into a build.
 SOURCES = ['background.js', 'rules.js']
 
 
