@@ -29,9 +29,10 @@ export class DbusService {
     // the sender's unique name is read.
     ReportActiveTabAsync(params, invocation) {
         let [browser, host, detail] = params;
-        let sender = invocation.get_sender();
-        if (this._source.setState(browser, host, detail) || !this._watches.has(sender))
-            this._watch(sender, browser);
+        // Watch first: the bookkeeping must not depend on the credit
+        // pipeline below succeeding.
+        this._watch(invocation.get_sender(), browser);
+        this._source.setState(browser, host, detail);
         invocation.return_value(null);
     }
 

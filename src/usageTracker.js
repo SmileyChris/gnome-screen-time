@@ -18,10 +18,6 @@ export class UsageTracker {
         this._store = store;
         this._settings = settings;
         this._sources = sources;
-        // A push source (browser companion) changed state: re-credit now
-        // rather than at the next tick, so a tab switch lands within
-        // resolve latency like a pane switch does.
-        this._sources.onChange = () => this._refresh();
         this._lastTime = Date.now();
 
         // Where time is being credited right now: [appId], [appId, activityId]
@@ -33,6 +29,15 @@ export class UsageTracker {
         // Bumped whenever the focused window or presence changes, so a
         // resolve that started against an older state is dropped on return.
         this._resolveSeq = 0;
+
+        // A push source (browser companion) changed state. Re-credit only
+        // when that source is the one describing the focused window;
+        // otherwise a tab change in an unfocused browser would re-resolve a
+        // focused terminal and spawn zellij on every report.
+        this._sources.onChange = source => {
+            if (this._path && source.claims(this._path[0]))
+                this._refresh();
+        };
 
         // screenShield only exists when GNOME can lock at all (GDM + systemd),
         // so presence detection treats it as optional; max-interval is the backstop.
@@ -92,21 +97,33 @@ export class UsageTracker {
     }
 
     // Credits elapsed time (since _lastTime) to whatever path is currently
-    // tracked. Callers are responsible for updating _lastTime afterward.
+    // tracked and advances the clock. The store keeps whole seconds, so the
+    // fraction it rounds away is left on the clock instead of being dropped:
+    // sub-second flushes (a browser reporting rapid tab changes) then neither
+    // lose time nor inflate it.
     _flush(now) {
-        let secs = Math.min((now - this._lastTime) / 1000, this._getMaxInterval());
-        if (this._path && secs > 0)
-            this._store.addTime(this._path, this._names, secs);
+        let elapsed = (now - this._lastTime) / 1000;
+        let secs = Math.min(elapsed, this._getMaxInterval());
+        if (!this._path || secs <= 0) {
+            this._lastTime = now;
+            return;
+        }
+        let credited = Math.round(secs);
+        if (credited > 0)
+            this._store.addTime(this._path, this._names, credited);
+        // When max-interval capped the stretch, the excess is discarded on
+        // purpose (that is what the setting is for), so no residual.
+        this._lastTime = secs < elapsed ? now : now - (secs - credited) * 1000;
     }
 
-    // Starts tracking `app` (or nothing) from `now`, at the app level only.
-    // The activity source is asked asynchronously; until it answers, time
+    // Starts tracking `app` (or nothing) at the app level only. The clock
+    // belongs to _flush, which every caller runs first, so this never touches
+    // it. The activity source is asked asynchronously; until it answers, time
     // belongs to the app alone.
-    _setCurrent(app, now) {
+    _setCurrent(app) {
         this._path = app ? [app.id] : null;
         this._names = app ? [app.name] : null;
         this._win = app?.win ?? null;
-        this._lastTime = now;
         this._resolveSeq++;
         if (DEBUG && this._path)
             console.log(`[ScreenTime] path: ${this._path.join(' / ')}`);
@@ -143,11 +160,9 @@ export class UsageTracker {
         if (path.join('\0') === this._path.join('\0'))
             return;
 
-        let now = Date.now();
-        this._flush(now);
+        this._flush(Date.now());
         this._path = path;
         this._names = names;
-        this._lastTime = now;
         if (DEBUG)
             console.log(`[ScreenTime] path: ${path.join(' / ')}`);
     }
@@ -157,12 +172,10 @@ export class UsageTracker {
     _setAway(away) {
         let now = Date.now();
         this._away = away;
-        if (away) {
-            this._flush(now);
-            this._setCurrent(null, now);
-        } else {
-            this._setCurrent(this._currentApp(), now);
-        }
+        // Going away, this banks the tracked time; coming back, _path is
+        // already null, so it only resets the clock for the app picked up next.
+        this._flush(now);
+        this._setCurrent(away ? null : this._currentApp());
     }
 
     _onPresenceChanged() {
@@ -185,7 +198,7 @@ export class UsageTracker {
 
         let now = Date.now();
         this._flush(now);
-        this._setCurrent(this._currentApp(), now);
+        this._setCurrent(this._currentApp());
     }
 
     // Banks the interval so far and asks the sources again. Used by the 30s
@@ -193,9 +206,7 @@ export class UsageTracker {
     _refresh() {
         if (this._away || !this._path)
             return;
-        let now = Date.now();
-        this._flush(now);
-        this._lastTime = now;
+        this._flush(Date.now());
         // The pane or tab may have changed without a focus event.
         this._kickResolve();
     }

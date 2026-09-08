@@ -115,7 +115,8 @@ export class ZellijSource {
 // promise, so concurrent askers never trigger a second spawn. A source that
 // pushes state (the browser companion) reports changes through `onChange`;
 // the registry drops its cache so the next resolve sees the new state, and
-// forwards the event to the tracker.
+// forwards the event to the tracker along with the source that changed, so
+// the tracker can tell whether it describes the window in focus.
 export class ActivitySourceRegistry {
     constructor(sources = [new ZellijSource()]) {
         this._sources = sources;
@@ -123,13 +124,13 @@ export class ActivitySourceRegistry {
         this.onChange = null;
         for (let s of sources) {
             if ('onChange' in s)
-                s.onChange = () => this._onSourceChanged();
+                s.onChange = () => this._onSourceChanged(s);
         }
     }
 
-    _onSourceChanged() {
+    _onSourceChanged(source) {
         this._recent = new WeakMap();
-        this.onChange?.();
+        this.onChange?.(source);
     }
 
     resolve(win, appId, now = Date.now()) {
