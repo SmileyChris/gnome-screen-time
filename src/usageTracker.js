@@ -2,18 +2,33 @@ import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
+import { ActivitySourceRegistry } from './activitySources.js';
 
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
 const FLUSH_INTERVAL = 30;
 
+// Nothing outside the compositor can read a window title here, so the only
+// way to see what a real desktop resolves to is a log line:
+//   journalctl -f -o cat /usr/bin/gnome-shell | grep ScreenTime
+const DEBUG = GLib.getenv('GNOME_SHELL_EXTENSION_SCREEN_TIME_DEBUG') !== null;
+
 export class UsageTracker {
-    constructor(store, settings) {
+    constructor(store, settings, sources = new ActivitySourceRegistry()) {
         this._store = store;
         this._settings = settings;
+        this._sources = sources;
         this._lastTime = Date.now();
-        this._appId = null;
-        this._appName = null;
+
+        // Where time is being credited right now: [appId], [appId, activityId]
+        // or [appId, activityId, detailId], with matching display names. Null
+        // while nothing is focused or the user is away.
+        this._path = null;
+        this._names = null;
+        this._win = null;
+        // Bumped whenever the focused window or presence changes, so a
+        // resolve that started against an older state is dropped on return.
+        this._resolveSeq = 0;
 
         // screenShield only exists when GNOME can lock at all (GDM + systemd),
         // so presence detection treats it as optional; max-interval is the backstop.
@@ -67,17 +82,70 @@ export class UsageTracker {
         if (app.is_window_backed()) {
             let wmClass = win.get_wm_class();
             if (wmClass)
-                return { id: `wmclass:${wmClass}`, name: app.get_name() || wmClass };
+                return { id: `wmclass:${wmClass}`, name: app.get_name() || wmClass, win };
         }
-        return { id: app.get_id(), name: app.get_name() };
+        return { id: app.get_id(), name: app.get_name(), win };
     }
 
-    // Credits elapsed time (since _lastTime) to whatever app is currently
+    // Credits elapsed time (since _lastTime) to whatever path is currently
     // tracked. Callers are responsible for updating _lastTime afterward.
     _flush(now) {
         let secs = Math.min((now - this._lastTime) / 1000, this._getMaxInterval());
-        if (this._appId && secs > 0)
-            this._store.addTime([this._appId], [this._appName], secs);
+        if (this._path && secs > 0)
+            this._store.addTime(this._path, this._names, secs);
+    }
+
+    // Starts tracking `app` (or nothing) from `now`, at the app level only.
+    // The activity source is asked asynchronously; until it answers, time
+    // belongs to the app alone.
+    _setCurrent(app, now) {
+        this._path = app ? [app.id] : null;
+        this._names = app ? [app.name] : null;
+        this._win = app?.win ?? null;
+        this._lastTime = now;
+        this._resolveSeq++;
+        if (DEBUG && this._path)
+            console.log(`[ScreenTime] path: ${this._path.join(' / ')}`);
+        if (app)
+            this._kickResolve();
+    }
+
+    _kickResolve() {
+        if (!this._path || !this._win || this._away)
+            return;
+        let seq = this._resolveSeq;
+        this._sources.resolve(this._win, this._path[0]).then(sub => {
+            // The window or presence changed while the resolve was running.
+            if (seq !== this._resolveSeq || this._away || !this._path)
+                return;
+            this._applySubPath(sub);
+        });
+    }
+
+    // Switches to the resolved sub-path. Time since the last flush belongs to
+    // the previous path, so it is banked first; pane switches inside one
+    // window are then credited to within resolve latency, not the flush tick.
+    _applySubPath(sub) {
+        let path = [this._path[0]];
+        let names = [this._names[0]];
+        if (sub) {
+            path.push(sub.activityId);
+            names.push(sub.activityName);
+            if (sub.detailId) {
+                path.push(sub.detailId);
+                names.push(sub.detailName);
+            }
+        }
+        if (path.join('\0') === this._path.join('\0'))
+            return;
+
+        let now = Date.now();
+        this._flush(now);
+        this._path = path;
+        this._names = names;
+        this._lastTime = now;
+        if (DEBUG)
+            console.log(`[ScreenTime] path: ${path.join(' / ')}`);
     }
 
     // Going away banks the time so far and stops tracking; coming back re-reads
@@ -87,14 +155,10 @@ export class UsageTracker {
         this._away = away;
         if (away) {
             this._flush(now);
-            this._appId = null;
-            this._appName = null;
+            this._setCurrent(null, now);
         } else {
-            let app = this._currentApp();
-            this._appId = app?.id ?? null;
-            this._appName = app?.name ?? null;
+            this._setCurrent(this._currentApp(), now);
         }
-        this._lastTime = now;
     }
 
     _onPresenceChanged() {
@@ -117,18 +181,16 @@ export class UsageTracker {
 
         let now = Date.now();
         this._flush(now);
-
-        let app = this._currentApp();
-        this._appId = app?.id ?? null;
-        this._appName = app?.name ?? null;
-        this._lastTime = now;
+        this._setCurrent(this._currentApp(), now);
     }
 
     _onFlushTick() {
-        if (!this._away && this._appId) {
+        if (!this._away && this._path) {
             let now = Date.now();
             this._flush(now);
             this._lastTime = now;
+            // The pane may have changed without a focus event.
+            this._kickResolve();
         }
         return GLib.SOURCE_CONTINUE;
     }
@@ -155,5 +217,11 @@ export class UsageTracker {
             this._flushId = null;
         }
         this._flush(Date.now());
+        this._resolveSeq++;   // drop any resolve still in flight
+        this._sources.destroy();
+        this._sources = null;
+        this._win = null;
+        this._path = null;
+        this._names = null;
     }
 }
