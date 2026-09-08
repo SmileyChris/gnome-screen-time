@@ -26,6 +26,12 @@
       <summary>Hour a new day begins</summary>
       <description>Time tracked before this hour counts towards the previous day, so work that runs past midnight stays on the day it started. 0 is midnight, the plain calendar day.</description>
     </key>
+    <key name="percent-basis" type="s">
+      <choices><choice value="total"/><choice value="largest"/></choices>
+      <default>"total"</default>
+      <summary>What row percentages and bars are relative to</summary>
+      <description>"total" compares each row with its parent's total (the day for apps); "largest" compares with the biggest row at that level, so the top item reads 100%. Toggled by clicking the total card in the popup.</description>
+    </key>
     <key name="purge-requested" type="i">
       <default>0</default>
       <summary>Manual purge trigger</summary>

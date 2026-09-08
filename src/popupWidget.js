@@ -135,6 +135,18 @@ export class PopupWidget {
         this._addFooter();
     }
 
+    _percentBasis() {
+        return this._settings.get_string('percent-basis');
+    }
+
+    // What a level's rows are measured against: the parent's total, or the
+    // biggest named row at that level so the top item reads 100%.
+    _basisFor(named, parentTotal) {
+        if (this._percentBasis() !== 'largest')
+            return parentTotal;
+        return named.reduce((m, e) => Math.max(m, e.seconds), 0) || parentTotal;
+    }
+
     _addSeparator() {
         let sep = new PopupMenu.PopupSeparatorMenuItem();
         sep.style = 'margin: 2px 10px;';
@@ -205,11 +217,17 @@ export class PopupWidget {
             style: cardStyle(tier, false),
         });
 
-        card.add_child(new St.Label({
+        let titles = new St.BoxLayout({ vertical: true, y_align: Clutter.ActorAlign.CENTER });
+        titles.add_child(new St.Label({
             text: 'Total Screen Time',
-            y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';',
         }));
+        titles.add_child(new St.Label({
+            text: this._percentBasis() === 'largest' ? 'bars: of largest' : 'bars: of total',
+            opacity: DIM_OPACITY,
+            style: 'font-size: 9px; color: ' + CARD_FG + ';',
+        }));
+        card.add_child(titles);
         card.add_child(new St.BoxLayout({x_expand: true}));
         card.add_child(new St.Label({
             text: total > 0 ? formatTime(total) : '0m',
@@ -221,6 +239,13 @@ export class PopupWidget {
         // stylesheet :hover rule, so the hover swap is done here instead.
         card.connect('notify::hover', () => {
             card.style = cardStyle(tier, card.hover);
+        });
+        // Clicking the card flips what the row percentages compare against.
+        card.connect('button-release-event', () => {
+            this._settings.set_string('percent-basis',
+                this._percentBasis() === 'largest' ? 'total' : 'largest');
+            this._build();
+            return Clutter.EVENT_STOP;
         });
 
         item.add_child(card);
@@ -241,26 +266,35 @@ export class PopupWidget {
             ? named.filter(e => e.seconds >= MIN_ROW_SECONDS)
             : named;
         let top = eligible.slice(0, MAX_VISIBLE);
-        let rows = top.map((e, i) =>
-            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length], parentPath));
 
         // Everything not given its own row, including anything the store
         // already folded, goes here so the rows reconcile with the parent.
         let rest = named.filter(e => !top.includes(e));
         let restSeconds = rest.reduce((s, e) => s + e.seconds, 0) + (stored?.seconds ?? 0);
         let restCount = rest.length + (stored?.count ?? 0);
+        // Below level 1 the parent's own time shows as an "Unattributed" row.
+        let direct = depth > 0
+            ? Math.max(0, parentTotal - entries.reduce((s, e) => s + e.seconds, 0))
+            : 0;
+
+        // "Largest" scaling measures against the biggest row actually shown
+        // at this level, which may be the fold or the direct-time row.
+        let basis = this._basisFor([...named, { seconds: restSeconds }, { seconds: direct }], parentTotal);
+        let rows = top.map((e, i) =>
+            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length], parentPath, basis));
         if (restCount > 0) {
             let row = makeExpandableRow({
                 name: `Other ${restCount} ${NOUNS[depth]}`,
                 seconds: restSeconds,
                 pct: pctOf(restSeconds, parentTotal),
+                barPct: pctOf(restSeconds, basis),
                 color: COLORS[top.length % COLORS.length],
                 depth,
                 dim: true,
             });
             this._menu.addMenuItem(row.item);
             row.setChildren(rest.map((e, i) => this._addEntry(e, parentTotal, depth,
-                COLORS[(MAX_VISIBLE + i) % COLORS.length], parentPath)));
+                COLORS[(MAX_VISIBLE + i) % COLORS.length], parentPath, basis)));
             rows.push(row);
         }
 
@@ -268,16 +302,15 @@ export class PopupWidget {
         // children (see UsageStore.addTime), but direct time has no entry
         // of its own: a terminal pane with no zellij session, or the
         // interval before the source resolves, is credited to the parent
-        // only. Surface the gap as an "Unattributed" leaf so the visible
-        // rows still sum to the parent's total. At zero it stays hidden until
-        // a long press on the parent reveals it, so direct time can be added.
+        // only. Surface the gap as an unlabeled leaf so the visible rows
+        // still sum to the parent's total. At zero it stays hidden until a
+        // long press on the parent reveals it, so direct time can be added.
         if (depth > 0) {
-            let childTotal = entries.reduce((s, e) => s + e.seconds, 0);
-            let direct = Math.max(0, parentTotal - childTotal);
             let row = this._addLeaf({
                 name: 'Unattributed',
                 seconds: direct,
                 pct: pctOf(direct, parentTotal),
+                barPct: pctOf(direct, basis),
                 color: COLORS[(top.length + 1) % COLORS.length],
                 depth,
                 dim: true,
@@ -311,13 +344,14 @@ export class PopupWidget {
 
     // One entry as a row. Entries with children become expandable and their
     // children are rendered as a nested level, bars relative to this entry.
-    _addEntry(entry, parentTotal, depth, color, parentPath) {
+    _addEntry(entry, parentTotal, depth, color, parentPath, basis = parentTotal) {
         let path = [...parentPath, entry.appId ?? entry.id];
         let children = sortedChildren(entry.children);
         let opts = {
             name: entry.displayName,
             seconds: entry.seconds,
             pct: pctOf(entry.seconds, parentTotal),
+            barPct: pctOf(entry.seconds, basis),
             color,
             depth,
         };

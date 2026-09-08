@@ -4,7 +4,7 @@ import GLib from 'gi://GLib';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { Slider } from 'resource:///org/gnome/shell/ui/slider.js';
 import { formatTime } from './formatTime.js';
-import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
+import { ROW_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
 
 // Pixels of indent per nesting level. The bar shrinks by the same amount so
 // every level's right edge stays aligned.
@@ -70,7 +70,9 @@ function addLongPress(actor, onLongPress) {
 
 // Name, "time · pct%" and a bar, wrapped in a non-activating menu item.
 // `arrow` is an optional St.Label owned by an expandable row.
-function buildRow({ name, seconds, pct, color, depth = 0, dim = false }, arrow) {
+// `pct` is what the label shows (share of the parent); `barPct`, when given,
+// is what the bar draws (share of the largest sibling in that display mode).
+function buildRow({ name, seconds, pct, barPct = pct, color, depth = 0, dim = false }, arrow) {
     let item = menuItem();
 
     let indent = depth * INDENT;
@@ -99,8 +101,10 @@ function buildRow({ name, seconds, pct, color, depth = 0, dim = false }, arrow) 
     topRow.add_child(valueLabel);
     row.add_child(topRow);
 
-    let barW = BAR_W - indent;
-    let bar = makeUsageBar(Math.round(barW * pct / 100), color, barW);
+    // The track spans the row's content box, so a 100% bar reaches the
+    // right edge of the value label above it.
+    let barW = ROW_W - indent;
+    let bar = makeUsageBar(Math.round(barW * Math.min(barPct, 100) / 100), color, barW);
     row.add_child(bar);
     return { item, row, topRow, valueLabel, bar, barW, indent };
 }
