@@ -3,13 +3,21 @@ import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
-import { todayKey, todayKeyFor, dateKey } from './usageStore.js';
+import { todayKey, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
-import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
+import { ROW_W, DIM_OPACITY } from './usageBar.js';
+import { makeRow, makeExpandableRow } from './usageRows.js';
 
 const MAX_VISIBLE = 5;
 const MIN_ROW_SECONDS = 60;
 const COLORS = ['#3584e4', '#33d17a', '#e5a50a', '#9141ac', '#ed333b'];
+
+// Noun for the "Other N ..." fold row at each depth.
+const NOUNS = ['apps', 'activities', 'details'];
+
+function pctOf(part, whole) {
+    return whole > 0 ? Math.round(part / whole * 100) : 0;
+}
 
 // The card paints its own background, so it needs its own dark-mode foreground too.
 const CARD_FG = '#241f31';
@@ -43,8 +51,8 @@ function shiftKey(key, days) {
     return dateKey(keyToDate(key).add_days(days));
 }
 
-function labelForKey(key, startHour) {
-    let today = todayKey(startHour);
+function labelForKey(key) {
+    let today = todayKey();
     if (key === today)
         return 'Today';
     if (key === shiftKey(today, -1))
@@ -58,7 +66,7 @@ export class PopupWidget {
         this._store = store;
         this._settings = settings;
         this._openPrefs = openPrefs;
-        this._date = todayKeyFor(settings);
+        this._date = todayKey();
         this._timerSection = new AppTimerSection(store, settings);
 
         this._build();
@@ -69,7 +77,7 @@ export class PopupWidget {
     }
 
     _refresh() {
-        this._date = todayKeyFor(this._settings);
+        this._date = todayKey();
         this._timerSection.reset();
         this._build();
     }
@@ -79,8 +87,8 @@ export class PopupWidget {
     _earliestKey() {
         let retention = this._settings.get_int('retention-days');
         if (retention > 0)
-            return shiftKey(todayKeyFor(this._settings), -retention);
-        return this._store.getOldestDate() ?? todayKeyFor(this._settings);
+            return shiftKey(todayKey(), -retention);
+        return this._store.getOldestDate() ?? todayKey();
     }
 
     _build() {
@@ -107,19 +115,7 @@ export class PopupWidget {
             }));
             this._menu.addMenuItem(empty);
         } else {
-            let top = all.filter(a => a.seconds >= MIN_ROW_SECONDS)
-                .slice(0, MAX_VISIBLE);
-            for (let i = 0; i < top.length; i++)
-                this._addAppRow(top[i], total, COLORS[i % COLORS.length]);
-
-            // Everything not given its own row, including the sub-minute apps,
-            // is folded in here, so the rows reconcile with the total.
-            let rest = all.filter(a => !top.includes(a));
-            if (rest.length > 0) {
-                let restSeconds = rest.reduce((s, a) => s + a.seconds, 0);
-                this._addOtherAppsRow(rest, restSeconds, total,
-                    COLORS[top.length % COLORS.length]);
-            }
+            this._addEntries(all, total, 0);
         }
 
         this._addSeparator();
@@ -146,7 +142,7 @@ export class PopupWidget {
         });
 
         let canPrev = this._date > this._earliestKey();
-        let canNext = this._date < todayKeyFor(this._settings);
+        let canNext = this._date < todayKey();
 
         row.add_child(this._navButton('go-previous-symbolic', canPrev, () => {
             this._date = shiftKey(this._date, -1);
@@ -154,7 +150,7 @@ export class PopupWidget {
         }));
 
         row.add_child(new St.Label({
-            text: labelForKey(this._date, this._settings.get_int('day-start-hour')),
+            text: labelForKey(this._date),
             x_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
@@ -219,95 +215,88 @@ export class PopupWidget {
         this._menu.addMenuItem(item);
     }
 
-    _addAppRow(app, total, color) {
-        let item = new PopupMenu.PopupBaseMenuItem({activate: false});
-        item.track_hover = false;
-        item.style = 'padding: 0;';
-        let pct = total > 0 ? Math.round(app.seconds / total * 100) : 0;
-        let fillW = Math.round(BAR_W * pct / 100);
+    // Renders one level of entries as rows under `parentTotal`, returning the
+    // rows so an expandable parent can show and hide them. Entries carry
+    // `displayName`, `seconds` and optional `children`; below level 1 they
+    // also carry `id`, which the store's fold key is matched on.
+    _addEntries(entries, parentTotal, depth) {
+        let stored = entries.find(e => e.id === OTHER_KEY);
+        let named = entries.filter(e => e !== stored);
 
-        let row = new St.BoxLayout({
-            vertical: true,
-            style: 'padding: 4px 10px; width: ' + ROW_W + 'px;',
-        });
+        // The one-minute floor applies at level 1 only. Deeper, a day of
+        // short sessions would otherwise show an almost empty breakdown.
+        let eligible = depth === 0
+            ? named.filter(e => e.seconds >= MIN_ROW_SECONDS)
+            : named;
+        let top = eligible.slice(0, MAX_VISIBLE);
+        let rows = top.map((e, i) =>
+            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length]));
 
-        let topRow = new St.BoxLayout();
-        topRow.add_child(new St.Label({
-            text: app.displayName,
-            style: 'font-size: 11px; font-weight: 500;',
-        }));
-        topRow.add_child(new St.BoxLayout({x_expand: true}));
-        topRow.add_child(new St.Label({
-            text: formatTime(app.seconds) + ' · ' + pct + '%',
-            opacity: DIM_OPACITY,
-            style: 'font-size: 10px;',
-        }));
-        row.add_child(topRow);
-
-        row.add_child(makeUsageBar(fillW, color));
-
-        item.add_child(row);
-        this._menu.addMenuItem(item);
-        return item;
-    }
-
-    _addOtherAppsRow(otherApps, otherTotal, total, color) {
-        let item = new PopupMenu.PopupBaseMenuItem({activate: false});
-        item.track_hover = false;
-        item.style = 'padding: 0;';
-        let pct = total > 0 ? Math.round(otherTotal / total * 100) : 0;
-        let fillW = Math.round(BAR_W * pct / 100);
-
-        let row = new St.BoxLayout({
-            vertical: true,
-            style: 'padding: 4px 10px; width: ' + ROW_W + 'px;',
-        });
-
-        let topRow = new St.BoxLayout();
-        topRow.add_child(new St.Label({
-            text: `Other ${otherApps.length} apps`,
-            opacity: DIM_OPACITY,
-            style: 'font-size: 11px; font-weight: 500;',
-        }));
-        topRow.add_child(new St.BoxLayout({x_expand: true}));
-        topRow.add_child(new St.Label({
-            text: formatTime(otherTotal) + ' · ' + pct + '%',
-            opacity: DIM_OPACITY,
-            style: 'font-size: 10px;',
-        }));
-        let expandArrow = new St.Label({
-            text: ' ▸',
-            opacity: DIM_OPACITY,
-            style: 'font-size: 10px;',
-        });
-        topRow.add_child(expandArrow);
-        row.add_child(topRow);
-
-        row.add_child(makeUsageBar(fillW, color));
-
-        let btn = new St.Button({child: row, style: 'padding: 0;'});
-        item.add_child(btn);
-        this._menu.addMenuItem(item);
-
-        let expanded = false;
-        let otherItems = [];
-        for (let i = 0; i < otherApps.length; i++) {
-            let appItem = this._addAppRow(otherApps[i], total,
-                COLORS[(MAX_VISIBLE + i) % COLORS.length]);
-            appItem.hide();
-            otherItems.push(appItem);
+        // Everything not given its own row, including anything the store
+        // already folded, goes here so the rows reconcile with the parent.
+        let rest = named.filter(e => !top.includes(e));
+        let restSeconds = rest.reduce((s, e) => s + e.seconds, 0) + (stored?.seconds ?? 0);
+        let restCount = rest.length + (stored?.count ?? 0);
+        if (restCount > 0) {
+            let row = makeExpandableRow({
+                name: `Other ${restCount} ${NOUNS[depth]}`,
+                seconds: restSeconds,
+                pct: pctOf(restSeconds, parentTotal),
+                color: COLORS[top.length % COLORS.length],
+                depth,
+                dim: true,
+            });
+            this._menu.addMenuItem(row.item);
+            row.setChildren(rest.map((e, i) => this._addEntry(e, parentTotal, depth,
+                COLORS[(MAX_VISIBLE + i) % COLORS.length])));
+            rows.push(row);
         }
 
-        btn.connect('clicked', () => {
-            expanded = !expanded;
-            expandArrow.text = expanded ? ' ▾' : ' ▸';
-            for (let oi of otherItems) {
-                if (expanded)
-                    oi.show();
-                else
-                    oi.hide();
+        // Below level 1, a node's own seconds is its direct time plus its
+        // children (see UsageStore.addTime), but direct time has no entry
+        // of its own: a terminal pane with no zellij session, or the
+        // interval before the source resolves, is credited to the parent
+        // only. Surface the gap as an "Unattributed" leaf so the visible
+        // rows still sum to the parent's total.
+        if (depth > 0) {
+            let childTotal = entries.reduce((s, e) => s + e.seconds, 0);
+            let direct = parentTotal - childTotal;
+            if (direct > 0) {
+                let row = makeRow({
+                    name: 'Unattributed',
+                    seconds: direct,
+                    pct: pctOf(direct, parentTotal),
+                    color: COLORS[(top.length + 1) % COLORS.length],
+                    depth,
+                    dim: true,
+                });
+                this._menu.addMenuItem(row.item);
+                rows.push(row);
             }
-        });
+        }
+        return rows;
+    }
+
+    // One entry as a row. Entries with children become expandable and their
+    // children are rendered as a nested level, bars relative to this entry.
+    _addEntry(entry, parentTotal, depth, color) {
+        let children = sortedChildren(entry.children);
+        let opts = {
+            name: entry.displayName,
+            seconds: entry.seconds,
+            pct: pctOf(entry.seconds, parentTotal),
+            color,
+            depth,
+        };
+        if (children.length === 0) {
+            let row = makeRow(opts);
+            this._menu.addMenuItem(row.item);
+            return row;
+        }
+        let row = makeExpandableRow(opts);
+        this._menu.addMenuItem(row.item);
+        row.setChildren(this._addEntries(children, entry.seconds, depth + 1));
+        return row;
     }
 
     _addFooter() {
