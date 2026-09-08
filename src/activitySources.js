@@ -150,9 +150,9 @@ export class ActivitySourceRegistry {
     }
 
     destroy() {
+        this.onChange = null;
         for (let s of this._sources)
             s.destroy?.();
         this._sources = [];
-        this.onChange = null;
     }
 }

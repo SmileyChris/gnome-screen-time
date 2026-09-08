@@ -19,7 +19,7 @@ export class BrowserSource {
     }
 
     claims(appId) {
-        return appId in BROWSER_APP_IDS;
+        return Object.hasOwn(BROWSER_APP_IDS, appId);
     }
 
     // Empty or null `host` means no breakdown. Returns whether anything changed.
@@ -28,12 +28,13 @@ export class BrowserSource {
             return false;
         let next = null;
         if (host) {
-            // A path segment literally named "__other__" would merge into the
-            // store's fold node for genuinely folded siblings.
+            // A host or path segment literally named "__other__" would merge
+            // into the store's fold node for genuinely folded siblings.
+            let h = host === OTHER_KEY ? '_other_' : host;
             let d = detail || null;
             if (d === OTHER_KEY)
                 d = '_other_';
-            next = { host, detail: d };
+            next = { host: h, detail: d };
         }
         let prev = this._state.get(browser) ?? null;
         if (prev?.host === next?.host && prev?.detail === next?.detail && (prev === null) === (next === null))

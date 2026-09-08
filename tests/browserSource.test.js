@@ -1,5 +1,5 @@
 import { test, assert, assertEqual } from './harness.js';
-import { BrowserSource, BROWSER_APP_IDS, BROWSERS } from '../src/browserSource.js';
+import { BrowserSource, BROWSERS } from '../src/browserSource.js';
 
 test('browserSource: claims exactly the two browser app ids', () => {
     let s = new BrowserSource();
@@ -7,7 +7,7 @@ test('browserSource: claims exactly the two browser app ids', () => {
     assert(s.claims('zen.desktop'));
     assert(!s.claims('firefox.desktop'));
     assert(!s.claims('org.gnome.Console.desktop'));
-    assertEqual(Object.values(BROWSER_APP_IDS).sort(), [...BROWSERS].sort());
+    assertEqual(BROWSERS, ['brave', 'zen']);
 });
 
 test('browserSource: no state resolves to null', async () => {
@@ -70,4 +70,16 @@ test('browserSource: destroy clears state and handler', async () => {
     s.destroy();
     assertEqual(await s.resolve({}, 'brave-browser.desktop'), null);
     assertEqual(s.onChange, null);
+});
+
+test('browserSource: a host named __other__ is renamed too', async () => {
+    let s = new BrowserSource();
+    s.setState('brave', '__other__', 'x');
+    assertEqual((await s.resolve({}, 'brave-browser.desktop')).activityId, '_other_');
+});
+
+test('browserSource: claims ignores inherited property names', () => {
+    let s = new BrowserSource();
+    assert(!s.claims('toString'));
+    assert(!s.claims('constructor'));
 });
