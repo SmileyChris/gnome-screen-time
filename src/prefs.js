@@ -2,6 +2,7 @@ import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import Adw from 'gi://Adw';
 import GLib from 'gi://GLib';
+import GioUnix from 'gi://GioUnix';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
@@ -242,7 +243,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         });
         page.add(group);
 
-        const installed = id => Gio.DesktopAppInfo.new(BROWSERS[id].appId) !== null;
+        const installed = id => GioUnix.DesktopAppInfo.new(BROWSERS[id].appId) !== null;
 
         // The host manifest doubles as the pointer to the checkout, which is
         // where the built extension directories live.

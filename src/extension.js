@@ -16,7 +16,7 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
         this._popup = new PopupWidget(this._indicator.menu, this._store,
-            this._settings, () => this.openPreferences());
+            this._settings, () => this._openPrefs());
 
         // The browser companion pushes into this source over D-Bus; the same
         // instance sits in the registry the tracker reads from.
@@ -36,6 +36,20 @@ export default class ScreenTimeExtension extends Extension {
         this._settings.connectObject(
             'changed::show-total-in-panel', () => this._syncPanelLabel(), this);
         this._syncPanelLabel();
+    }
+
+    // The Shell refuses a second preferences dialog while one is showing, so
+    // if the prefs process already has a window up, raise that instead.
+    _openPrefs() {
+        let existing = global.get_window_actors()
+            .map(actor => actor.meta_window)
+            .find(w => w && (w.get_gtk_application_id?.() === 'org.gnome.Shell.Extensions' ||
+                             w.get_wm_class() === 'org.gnome.Shell.Extensions'));
+        if (existing) {
+            existing.activate(global.get_current_time());
+            return;
+        }
+        this.openPreferences();
     }
 
     _syncPanelLabel() {
