@@ -10,6 +10,13 @@ export const STORE_FILE = GLib.build_filenamev([STORE_DIR, 'usage.json']);
 const AUTOSAVE_INTERVAL = 30;
 const MANUAL_PURGE_DAYS = 7;
 
+// Per-parent cap on named children per day, so unbounded detail keys (every
+// repository, every URL path) cannot grow the single JSON file without limit.
+// This is a storage bound; the popup's five-row display fold is separate.
+export const MAX_CHILDREN = 20;
+// Reserved child key that absorbs children folded out by MAX_CHILDREN.
+export const OTHER_KEY = '__other__';
+
 // Date keys double as the on-disk JSON keys, so this format is a storage
 // contract, so every caller formats through here rather than repeating it.
 export function dateKey(dateTime) {
@@ -35,6 +42,58 @@ export function knownAppsFromData(data) {
     return known;
 }
 
+// Children of a node as a list, biggest first. `count` is how many named
+// siblings were folded into the OTHER_KEY entry (0 for ordinary children).
+export function sortedChildren(children) {
+    if (!children)
+        return [];
+    return Object.entries(children)
+        .map(([id, node]) => ({
+            id,
+            displayName: node.displayName,
+            seconds: node.seconds,
+            count: node.count ?? 0,
+            children: node.children ?? null,
+        }))
+        .sort((a, b) => b.seconds - a.seconds);
+}
+
+function namedCount(siblings) {
+    return Object.keys(siblings).filter(k => k !== OTHER_KEY).length;
+}
+
+// Moves the smallest named sibling into OTHER_KEY. Its seconds stay under the
+// same parent, so totals still reconcile at every level.
+function foldSmallest(siblings) {
+    let smallestId = null;
+    for (let [id, node] of Object.entries(siblings)) {
+        if (id === OTHER_KEY)
+            continue;
+        if (smallestId === null || node.seconds < siblings[smallestId].seconds)
+            smallestId = id;
+    }
+    if (smallestId === null)
+        return;
+    let other = siblings[OTHER_KEY] ??= { displayName: 'Other', seconds: 0, count: 0 };
+    other.seconds += siblings[smallestId].seconds;
+    other.count += 1;
+    delete siblings[smallestId];
+}
+
+// Adds seconds to siblings[id], creating it if needed. `cap` is null for
+// level 1 (apps were never capped) and MAX_CHILDREN below it.
+function creditNode(siblings, id, displayName, seconds, cap) {
+    let node = siblings[id];
+    if (!node) {
+        if (cap !== null && namedCount(siblings) >= cap)
+            foldSmallest(siblings);
+        node = siblings[id] = { displayName, seconds: 0 };
+    }
+    node.seconds += seconds;
+    node.displayName = displayName;
+    return node;
+}
+
 export class UsageStore {
     constructor(settings) {
         this._settings = settings;
@@ -44,7 +103,7 @@ export class UsageStore {
         this._cancellable = new Gio.Cancellable();
         this.onChange = null;
         this._ensureDir();
-        this._load();
+        this.loaded = this._load();
         this._autoSaveId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT, AUTOSAVE_INTERVAL,
             () => { this._save(); return GLib.SOURCE_CONTINUE; }
@@ -153,16 +212,25 @@ export class UsageStore {
         return changed;
     }
 
-    addTime(appId, displayName, seconds) {
+    // Credits `seconds` to every node on `path` ([appId], [appId, activityId]
+    // or [appId, activityId, detailId]), so a level-1 total is always its own
+    // direct time plus its children. `names` are the matching display names.
+    addTime(path, names, seconds) {
         let today = todayKey();
-        if (!this._data[today])
-            this._data[today] = {};
-        if (!this._data[today][appId])
-            this._data[today][appId] = { displayName, seconds: 0 };
-        this._data[today][appId].seconds += Math.round(seconds);
-        this._data[today][appId].displayName = displayName;
+        let day = this._data[today] ??= {};
+        let secs = Math.round(seconds);
+        let siblings = day;
+        let top = null;
+        for (let i = 0; i < path.length; i++) {
+            let node = creditNode(siblings, path[i], names[i], secs,
+                i === 0 ? null : MAX_CHILDREN);
+            if (i === 0)
+                top = node;
+            if (i + 1 < path.length)
+                siblings = node.children ??= {};
+        }
         this._dirty = true;
-        this.onChange?.(appId, displayName, this._data[today][appId].seconds);
+        this.onChange?.(path[0], names[0], top.seconds);
     }
 
     getTodayTotal() {
@@ -180,6 +248,7 @@ export class UsageStore {
                 appId,
                 displayName: info.displayName,
                 seconds: info.seconds,
+                children: info.children ?? null,
             }))
             .sort((a, b) => b.seconds - a.seconds);
     }

@@ -77,7 +77,7 @@ export class UsageTracker {
     _flush(now) {
         let secs = Math.min((now - this._lastTime) / 1000, this._getMaxInterval());
         if (this._appId && secs > 0)
-            this._store.addTime(this._appId, this._appName, secs);
+            this._store.addTime([this._appId], [this._appName], secs);
     }
 
     // Going away banks the time so far and stops tracking; coming back re-reads
