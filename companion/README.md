@@ -6,7 +6,8 @@ example `github.com / anthropics/claude-code`.
 
 ## What leaves the browser
 
-Only `{browser, host, detail}`, computed in `webext/rules.js`:
+Only `{browser, host, detail}`. The browser id is a build-time constant from the
+generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`:
 
 - `browser`: `brave` or `zen`, a build-time constant.
 - `host`: hostname, lowercased, one leading `www.` removed.
@@ -44,7 +45,8 @@ stable and matches the host manifest.
 Zen: `about:config`, set `xpinstall.signatures.required` to `false`, then
 open `dist/screen-time-zen.xpi`. If Zen ignores the pref (release builds of
 Firefox do), load it temporarily from `about:debugging` for testing; a signed
-build through AMO's unlisted channel is the permanent route.
+build through AMO's unlisted channel is the permanent route. For that fallback
+pick `dist/webext-zen/manifest.json`, the unpacked Zen build.
 
 `make companion-uninstall` removes the host manifests. Remove the extension
 from the browser separately.
