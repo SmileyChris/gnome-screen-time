@@ -25,6 +25,9 @@ const ERROR_LOG_INTERVAL_MS = 60000;
 let stdin = new GioUnix.InputStream({ fd: 0, close_fd: false });
 let stdout = new GioUnix.OutputStream({ fd: 1, close_fd: false });
 let lastErrorLog = 0;
+// The most recent report, resent when the Shell extension announces itself
+// (it may have started, or been reloaded, after this host connected).
+let lastReport = null;
 
 function log(msg) {
     printerr(`[screen-time-host] ${msg}`);
@@ -52,6 +55,11 @@ function forward(report) {
     }
 }
 
+function onShellReady() {
+    if (lastReport)
+        forward(lastReport);
+}
+
 function handle(message) {
     if (message === null) {
         log('skipping malformed frame');
@@ -66,27 +74,52 @@ function handle(message) {
         log(`skipping unexpected message with keys ${Object.keys(message).join(',')}`);
         return;
     }
+    lastReport = message;
     forward(message);
 }
 
+// Subscribing to a signal needs no bus name of our own, so the Shell can
+// reach every live host without knowing about it in advance.
+Gio.DBus.session.signal_subscribe(
+    BUS_NAME, INTERFACE, 'Ready', OBJECT_PATH, null,
+    Gio.DBusSignalFlags.NONE, onShellReady);
+
+// stdin is read asynchronously so the main loop stays free for the signal.
+let loop = new GLib.MainLoop(null, false);
 let pending = new Uint8Array(0);
-for (;;) {
-    let chunk = stdin.read_bytes(65536, null);
-    if (chunk.get_size() === 0)
-        break;   // browser closed the pipe
-    let data = chunk.toArray();
-    let joined = new Uint8Array(pending.length + data.length);
-    joined.set(pending, 0);
-    joined.set(data, pending.length);
-    let decoded;
-    try {
-        decoded = decodeFrames(joined);
-    } catch (e) {
-        log(`protocol error, exiting: ${e.message}`);
-        System.exit(1);
-    }
-    pending = decoded.rest;
-    for (let m of decoded.messages)
-        handle(m);
+
+function readMore() {
+    stdin.read_bytes_async(65536, GLib.PRIORITY_DEFAULT, null, (stream, res) => {
+        let chunk;
+        try {
+            chunk = stream.read_bytes_finish(res);
+        } catch (e) {
+            log(`stdin read failed, exiting: ${e.message}`);
+            loop.quit();
+            return;
+        }
+        if (chunk.get_size() === 0) {
+            loop.quit();   // browser closed the pipe
+            return;
+        }
+        let data = chunk.toArray();
+        let joined = new Uint8Array(pending.length + data.length);
+        joined.set(pending, 0);
+        joined.set(data, pending.length);
+        let decoded;
+        try {
+            decoded = decodeFrames(joined);
+        } catch (e) {
+            log(`protocol error, exiting: ${e.message}`);
+            System.exit(1);
+        }
+        pending = decoded.rest;
+        for (let m of decoded.messages)
+            handle(m);
+        readMore();
+    });
 }
+
+readMore();
+loop.run();
 System.exit(0);

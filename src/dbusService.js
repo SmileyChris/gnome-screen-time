@@ -15,6 +15,7 @@ const INTERFACE_XML = `
     <method name="GetCompanions">
       <arg type="a(ssbb)" direction="out" name="companions"/>
     </method>
+    <signal name="Ready"/>
   </interface>
 </node>`;
 
@@ -28,6 +29,9 @@ export class DbusService {
         this._watches = new Map();   // `${sender}\0${browser}` -> { id, browser }
         this._impl = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
         this._impl.export(Gio.DBus.session, OBJECT_PATH);
+        // Companions that started before us (browser autostart, a Shell
+        // extension reload) resend their last report on this signal.
+        this._impl.emit_signal('Ready', null);
     }
 
     // gjs routes a method named `<Method>Async` the raw parameters and the

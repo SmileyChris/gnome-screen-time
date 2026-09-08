@@ -28,6 +28,7 @@ The native host (`host/screen-time-host.js`, gjs) calls, on the session bus:
     method       ReportActiveTab(s browser, s host, s detail, b focused) -> ()
 
     method       GetCompanions() -> a(ssbb)   (browser, current site, connected, focused)
+    signal       Ready                        emitted on enable; hosts resend their last report
 
 Empty `host` means no breakdown. The extension watches the caller's unique
 bus name and clears that browser's state when it vanishes, so closing the
