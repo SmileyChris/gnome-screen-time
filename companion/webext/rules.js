@@ -30,8 +30,13 @@ export function reportFor(urlString, incognito) {
     let url;
     try {
         url = new URL(urlString);
-    } catch {
-        return EMPTY_REPORT;
+    } catch (e) {
+        // Browsers throw TypeError for an unparsable URL. Anything else means
+        // the environment has no URL parser at all, which must not read as
+        // "no breakdown": let it surface.
+        if (e instanceof TypeError)
+            return EMPTY_REPORT;
+        throw e;
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:')
         return EMPTY_REPORT;
