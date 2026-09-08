@@ -20,11 +20,20 @@ export function sessionFromTitle(title) {
 const TAB_RE = /^\s*tab\b[^{]*\bfocus=true\b/;
 const PANE_RE = /^\s*pane\b[^{]*\bfocus=true\b/;
 
+// KDL string literal, with backslash escapes. Blanked before any structural
+// scan so a brace or `focus=true` inside a quoted value is never mistaken
+// for syntax.
+const QUOTED_RE = /"(?:[^"\\]|\\.)*"/g;
+
 function count(str, ch) {
     let n = 0;
     for (let c of str)
         if (c === ch) n++;
     return n;
+}
+
+function structural(line) {
+    return line.replace(QUOTED_RE, '""');
 }
 
 // KDL string attribute, with backslash escapes collapsed.
@@ -37,18 +46,18 @@ export function focusedPane(layout) {
     if (typeof layout !== 'string')
         return null;
     let lines = layout.split('\n');
-    let start = lines.findIndex(l => TAB_RE.test(l));
+    let start = lines.findIndex(l => TAB_RE.test(structural(l)));
     if (start < 0)
         return null;
 
     let depth = 0;
     for (let i = start; i < lines.length; i++) {
         let line = lines[i];
-        if (i > start && PANE_RE.test(line)) {
-            let head = line.split('{')[0];
-            return { command: attr(head, 'command'), cwd: attr(head, 'cwd') };
+        let bare = structural(line);
+        if (i > start && PANE_RE.test(bare)) {
+            return { command: attr(line, 'command'), cwd: attr(line, 'cwd') };
         }
-        depth += count(line, '{') - count(line, '}');
+        depth += count(bare, '{') - count(bare, '}');
         if (depth <= 0)
             break;   // end of the focused tab's block
     }

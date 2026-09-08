@@ -146,3 +146,39 @@ test('basename: relative, absolute, trailing slash, spaces', () => {
     assertEqual(basename('Brain/Tactful/BNZ Finance Application'), 'BNZ Finance Application');
     assertEqual(basename('single'), 'single');
 });
+
+test('focusedPane: braces inside quoted args on an earlier pane do not end the tab early', () => {
+    let layout = `layout {
+    tab name="x" focus=true {
+        pane command="rg" cwd="dev/a" {
+            args "--replace" "}"
+        }
+        pane command="claude" cwd="dev/b" focus=true {
+            start_suspended true
+        }
+    }
+}`;
+    assertEqual(focusedPane(layout), { command: 'claude', cwd: 'dev/b' });
+});
+
+test('focusedPane: a brace inside a quoted value on the focused pane line itself', () => {
+    let layout = `layout {
+    tab name="x" focus=true {
+        pane command="fd" cwd="dev/{a,b}" focus=true {
+            args "-e" "{js,tsx}"
+        }
+    }
+}`;
+    assertEqual(focusedPane(layout), { command: 'fd', cwd: 'dev/{a,b}' });
+});
+
+test('focusedPane: attributes after focus=true on the pane line are still read', () => {
+    let layout = `layout {
+    tab name="x" focus=true {
+        pane focus=true command="vim" cwd="dev/c" {
+            start_suspended true
+        }
+    }
+}`;
+    assertEqual(focusedPane(layout), { command: 'vim', cwd: 'dev/c' });
+});
