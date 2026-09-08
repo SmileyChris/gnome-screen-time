@@ -219,7 +219,7 @@ export class UsageTracker {
         }
         let credited = Math.round(secs);
         if (credited > 0)
-            this._store.addTime(this._appId, this._appName, credited);
+            this._store.addTime([this._appId], [this._appName], credited);
         // When max-interval capped the stretch, the excess is discarded on
         // purpose (that is what the setting is for), so no residual.
         this._lastTime = secs < elapsed ? now : now - (secs - credited) * 1000;
