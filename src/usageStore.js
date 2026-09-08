@@ -121,6 +121,7 @@ export class UsageStore {
         this._data = {};
         this._dirty = false;
         this._loaded = false;
+        this._undo = null;
         this._cancellable = new Gio.Cancellable();
         this.onChange = null;
         this._ensureDir();
@@ -252,6 +253,111 @@ export class UsageStore {
         }
         this._dirty = true;
         this.onChange?.(path[0], names[0], top.seconds);
+    }
+
+    // Sets a node's own time, the part not covered by its children, and
+    // moves every ancestor by the same delta so totals keep reconciling.
+    // For a leaf that is its whole value. `path` names the node as in
+    // addTime; a node that ends at zero with no children is removed, and an
+    // emptied children map is dropped. Returns whether anything changed.
+    setDirectSeconds(dateKey, path, seconds) {
+        let day = this._data[dateKey];
+        if (!day || !Number.isFinite(seconds) || seconds < 0 || path.length === 0)
+            return false;
+        let target = Math.round(seconds);
+
+        // Walk down, remembering each node so the delta can walk back up.
+        let chain = [];
+        let siblings = day;
+        for (let id of path) {
+            let node = siblings?.[id];
+            if (!node)
+                return false;
+            chain.push({ siblings, id, node });
+            siblings = node.children;
+        }
+
+        let leaf = chain[chain.length - 1].node;
+        let childSum = Object.values(leaf.children ?? {}).reduce((s, c) => s + c.seconds, 0);
+        let delta = target - (leaf.seconds - childSum);
+        if (delta === 0)
+            return false;
+
+        this._snapshot(dateKey);
+        for (let { node } of chain)
+            node.seconds += delta;
+
+        // Prune from the leaf upward: a node at zero with no children goes,
+        // and a parent left with an empty map loses the map.
+        for (let i = chain.length - 1; i >= 0; i--) {
+            let { siblings: sibs, id, node } = chain[i];
+            if (node.children && Object.keys(node.children).length === 0)
+                delete node.children;
+            if (node.seconds <= 0 && !node.children)
+                delete sibs[id];
+        }
+
+        this._dirty = true;
+        let top = day[path[0]];
+        this.onChange?.(path[0], top?.displayName ?? null, top?.seconds ?? 0);
+        return true;
+    }
+
+    // Removes a node and everything under it, taking its whole time off every
+    // ancestor. Returns whether anything changed.
+    removeNode(dateKey, path) {
+        let day = this._data[dateKey];
+        if (!day || path.length === 0)
+            return false;
+        let chain = [];
+        let siblings = day;
+        for (let id of path) {
+            let node = siblings?.[id];
+            if (!node)
+                return false;
+            chain.push({ siblings, id, node });
+            siblings = node.children;
+        }
+        this._snapshot(dateKey);
+        let { siblings: sibs, id, node: removed } = chain[chain.length - 1];
+        delete sibs[id];
+        for (let i = 0; i < chain.length - 1; i++) {
+            let { node } = chain[i];
+            node.seconds -= removed.seconds;
+            if (node.children && Object.keys(node.children).length === 0)
+                delete node.children;
+        }
+        // Ancestors emptied by the removal go too, leaf-most first.
+        for (let i = chain.length - 2; i >= 0; i--) {
+            let { siblings: s2, id: id2, node } = chain[i];
+            if (node.seconds <= 0 && !node.children)
+                delete s2[id2];
+        }
+        this._dirty = true;
+        let top = day[path[0]];
+        this.onChange?.(path[0], top?.displayName ?? null, top?.seconds ?? 0);
+        return true;
+    }
+
+    // One level of undo for edits, in memory only: the day as it was before
+    // the most recent setDirectSeconds or removeNode. A new edit replaces it.
+    _snapshot(dateKey) {
+        // Plain JSON data, and gjs has no structuredClone.
+        this._undo = { dateKey, day: JSON.parse(JSON.stringify(this._data[dateKey])) };
+    }
+
+    canUndo(dateKey) {
+        return this._undo?.dateKey === dateKey;
+    }
+
+    undo(dateKey) {
+        if (!this.canUndo(dateKey))
+            return false;
+        this._data[dateKey] = this._undo.day;
+        this._undo = null;
+        this._dirty = true;
+        this.onChange?.();
+        return true;
     }
 
     getTodayTotal() {

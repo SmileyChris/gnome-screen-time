@@ -68,6 +68,10 @@ export class PopupWidget {
         this._openPrefs = openPrefs;
         this._date = todayKey();
         this._timerSection = new AppTimerSection(store, settings);
+        // Paths (joined with \0) whose rows are expanded, so a rebuild after
+        // an edit lands where the user was. Cleared on reopen and date change.
+        this._expanded = new Set();
+        this._expandables = [];
 
         this._build();
 
@@ -78,6 +82,7 @@ export class PopupWidget {
 
     _refresh() {
         this._date = todayKey();
+        this._expanded.clear();
         this._timerSection.reset();
         this._build();
     }
@@ -115,7 +120,12 @@ export class PopupWidget {
             }));
             this._menu.addMenuItem(empty);
         } else {
-            this._addEntries(all, total, 0);
+            this._expandables = [];
+            this._addEntries(all, total, 0, []);
+            for (let { key, row } of this._expandables) {
+                if (this._expanded.has(key))
+                    row.expand();
+            }
         }
 
         this._addSeparator();
@@ -146,6 +156,7 @@ export class PopupWidget {
 
         row.add_child(this._navButton('go-previous-symbolic', canPrev, () => {
             this._date = shiftKey(this._date, -1);
+            this._expanded.clear();
             this._build();
         }));
 
@@ -159,6 +170,7 @@ export class PopupWidget {
 
         row.add_child(this._navButton('go-next-symbolic', canNext, () => {
             this._date = shiftKey(this._date, 1);
+            this._expanded.clear();
             this._build();
         }));
 
@@ -219,7 +231,7 @@ export class PopupWidget {
     // rows so an expandable parent can show and hide them. Entries carry
     // `displayName`, `seconds` and optional `children`; below level 1 they
     // also carry `id`, which the store's fold key is matched on.
-    _addEntries(entries, parentTotal, depth) {
+    _addEntries(entries, parentTotal, depth, parentPath) {
         let stored = entries.find(e => e.id === OTHER_KEY);
         let named = entries.filter(e => e !== stored);
 
@@ -230,7 +242,7 @@ export class PopupWidget {
             : named;
         let top = eligible.slice(0, MAX_VISIBLE);
         let rows = top.map((e, i) =>
-            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length]));
+            this._addEntry(e, parentTotal, depth, COLORS[i % COLORS.length], parentPath));
 
         // Everything not given its own row, including anything the store
         // already folded, goes here so the rows reconcile with the parent.
@@ -248,7 +260,7 @@ export class PopupWidget {
             });
             this._menu.addMenuItem(row.item);
             row.setChildren(rest.map((e, i) => this._addEntry(e, parentTotal, depth,
-                COLORS[(MAX_VISIBLE + i) % COLORS.length])));
+                COLORS[(MAX_VISIBLE + i) % COLORS.length], parentPath)));
             rows.push(row);
         }
 
@@ -257,29 +269,50 @@ export class PopupWidget {
         // of its own: a terminal pane with no zellij session, or the
         // interval before the source resolves, is credited to the parent
         // only. Surface the gap as an unlabeled leaf so the visible rows
-        // still sum to the parent's total.
+        // still sum to the parent's total. At zero it stays hidden until a
+        // long press on the parent reveals it, so direct time can be added.
         if (depth > 0) {
             let childTotal = entries.reduce((s, e) => s + e.seconds, 0);
-            let direct = parentTotal - childTotal;
-            if (direct > 0) {
-                let row = makeRow({
-                    name: 'No breakdown',
-                    seconds: direct,
-                    pct: pctOf(direct, parentTotal),
-                    color: COLORS[(top.length + 1) % COLORS.length],
-                    depth,
-                    dim: true,
-                });
-                this._menu.addMenuItem(row.item);
-                rows.push(row);
-            }
+            let direct = Math.max(0, parentTotal - childTotal);
+            let row = this._addLeaf({
+                name: 'No breakdown',
+                seconds: direct,
+                pct: pctOf(direct, parentTotal),
+                color: COLORS[(top.length + 1) % COLORS.length],
+                depth,
+                dim: true,
+                suppressed: direct === 0,
+            }, parentPath, parentTotal);
+            rows.push(row);
+            rows.noBreakdown = row;
         }
         return rows;
     }
 
+    // A leaf row that can be long-pressed into edit mode. Saving writes the
+    // node's direct time (its whole value for a leaf) and rebuilds the
+    // popup with the same rows expanded.
+    _addLeaf(opts, path, parentTotal) {
+        let row = makeRow({
+            ...opts,
+            editable: {
+                parentTotal,
+                onSave: seconds => {
+                    this._store.setDirectSeconds(this._date, path, seconds);
+                    this._build();
+                },
+            },
+        });
+        this._menu.addMenuItem(row.item);
+        for (let extra of row.extraItems)
+            this._menu.addMenuItem(extra);
+        return row;
+    }
+
     // One entry as a row. Entries with children become expandable and their
     // children are rendered as a nested level, bars relative to this entry.
-    _addEntry(entry, parentTotal, depth, color) {
+    _addEntry(entry, parentTotal, depth, color, parentPath) {
+        let path = [...parentPath, entry.appId ?? entry.id];
         let children = sortedChildren(entry.children);
         let opts = {
             name: entry.displayName,
@@ -288,14 +321,36 @@ export class PopupWidget {
             color,
             depth,
         };
-        if (children.length === 0) {
-            let row = makeRow(opts);
-            this._menu.addMenuItem(row.item);
-            return row;
-        }
-        let row = makeExpandableRow(opts);
+        if (children.length === 0)
+            return this._addLeaf(opts, path, parentTotal);
+
+        let key = path.join('\0');
+        let kids = null;
+        let row = makeExpandableRow({
+            ...opts,
+            onToggle: expanded => {
+                if (expanded)
+                    this._expanded.add(key);
+                else
+                    this._expanded.delete(key);
+            },
+            // Holding a parent opens it and shows its direct-time row even
+            // at zero, since parents themselves are not edited.
+            onLongPress: () => {
+                row.expand();
+                kids?.noBreakdown?.reveal();
+            },
+            onDelete: () => {
+                this._store.removeNode(this._date, path);
+                this._build();
+            },
+        });
         this._menu.addMenuItem(row.item);
-        row.setChildren(this._addEntries(children, entry.seconds, depth + 1));
+        for (let extra of row.extraItems)
+            this._menu.addMenuItem(extra);
+        kids = this._addEntries(children, entry.seconds, depth + 1, path);
+        row.setChildren(kids);
+        this._expandables.push({ key, row });
         return row;
     }
 
@@ -306,6 +361,21 @@ export class PopupWidget {
 
         let row = new St.BoxLayout({x_expand: true, style: 'padding: 0 8px 2px 8px;'});
         row.add_child(this._timerSection.createToggleButton(() => this._build()));
+        // One level of undo for the last edit on the day being shown; the
+        // store forgets it on the next edit or when the extension restarts.
+        if (this._store.canUndo(this._date)) {
+            let undo = new St.Button({
+                label: 'Undo edit',
+                style_class: 'button',
+                style: 'font-size: 10px; padding: 2px 10px; margin-left: 8px;',
+                can_focus: true,
+            });
+            undo.connect('clicked', () => {
+                this._store.undo(this._date);
+                this._build();
+            });
+            row.add_child(undo);
+        }
         row.add_child(new St.BoxLayout({x_expand: true}));   // pushes the settings button right
 
         let btn = new St.Button({
