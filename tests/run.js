@@ -11,6 +11,7 @@ let tmp = GLib.Dir.make_tmp('screen-time-test-XXXXXX');
 GLib.setenv('XDG_DATA_HOME', tmp, true);
 
 const FILES = [
+    './zellijLayout.test.js',
     './formatTime.test.js',
     './appLimits.test.js',
     './usageStore.test.js',

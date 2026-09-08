@@ -6,6 +6,11 @@ export function test(name, fn) {
     tests.push({ name, fn });
 }
 
+export function assert(cond, msg = 'assertion failed') {
+    if (!cond)
+        throw new Error(msg);
+}
+
 // Deep equality by JSON, which is exact enough for the plain data these
 // modules produce and prints both sides on failure.
 export function assertEqual(actual, expected, msg = '') {
