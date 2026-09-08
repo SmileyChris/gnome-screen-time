@@ -272,7 +272,7 @@ export class PopupWidget {
         let rest = named.filter(e => !top.includes(e));
         let restSeconds = rest.reduce((s, e) => s + e.seconds, 0) + (stored?.seconds ?? 0);
         let restCount = rest.length + (stored?.count ?? 0);
-        // Below level 1 the parent's own time shows as a "Unattributed" row.
+        // Below level 1 the parent's own time shows as an "Unattributed" row.
         let direct = depth > 0
             ? Math.max(0, parentTotal - entries.reduce((s, e) => s + e.seconds, 0))
             : 0;
