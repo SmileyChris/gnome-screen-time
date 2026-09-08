@@ -11,7 +11,7 @@ const ARROW_CLOSED = ' ▸';
 const ARROW_OPEN = ' ▾';
 
 // Name, "time · pct%" and a bar, wrapped in a non-activating menu item.
-// `arrow` is an optional trailing St.Label owned by an expandable row.
+// `arrow` is an optional St.Label owned by an expandable row.
 function buildRow({ name, seconds, pct, color, depth = 0, dim = false }, arrow) {
     let item = new PopupMenu.PopupBaseMenuItem({activate: false});
     item.track_hover = false;
@@ -20,7 +20,9 @@ function buildRow({ name, seconds, pct, color, depth = 0, dim = false }, arrow) 
     let indent = depth * INDENT;
     let row = new St.BoxLayout({
         vertical: true,
-        style: `padding: 4px 10px 4px ${10 + indent}px; width: ${ROW_W}px;`,
+        // St's `width` is the content box, so the row narrows by the indent
+        // and every level's right edge lands in the same place.
+        style: `padding: 4px 10px 4px ${10 + indent}px; width: ${ROW_W - indent}px;`,
     });
 
     let topRow = new St.BoxLayout();
@@ -29,14 +31,15 @@ function buildRow({ name, seconds, pct, color, depth = 0, dim = false }, arrow) 
         opacity: dim ? DIM_OPACITY : 255,
         style: 'font-size: 11px; font-weight: 500;',
     }));
+    // The disclosure arrow sits beside the name, where the eye lands first.
+    if (arrow)
+        topRow.add_child(arrow);
     topRow.add_child(new St.BoxLayout({x_expand: true}));
     topRow.add_child(new St.Label({
         text: formatTime(seconds) + ' · ' + pct + '%',
         opacity: DIM_OPACITY,
         style: 'font-size: 10px;',
     }));
-    if (arrow)
-        topRow.add_child(arrow);
     row.add_child(topRow);
 
     let barW = BAR_W - indent;
