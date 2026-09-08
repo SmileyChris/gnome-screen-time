@@ -1,10 +1,10 @@
-UUID          = screen-time@gnome-screen-time
-VERSION       = 1.1.0
-EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
-SRC_DIR       = src
-SCHEMAS_DIR   = $(SRC_DIR)/schemas
-DIST_DIR      = dist
-PACK_FILE     = $(DIST_DIR)/$(UUID).shell-extension.zip
+UUID           = screen-time@gnome-screen-time
+VERSION        = 1.1.0
+EXTENSION_DIR  = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
+SRC_DIR        = src
+SCHEMAS_DIR    = $(SRC_DIR)/schemas
+DIST_DIR       = dist
+PACK_FILE      = $(DIST_DIR)/$(UUID).shell-extension.zip
 COMPANION_TOOL = python3 companion/tools/build.py
 
 .PHONY: all build schemas install uninstall pack companion-build lint check test clean restart
@@ -60,6 +60,8 @@ check:
 		fi; \
 	done; \
 	python3 -m json.tool $(SRC_DIR)/metadata.json >/dev/null || fail=1; \
+	python3 -m json.tool companion/webext/manifest.json >/dev/null || fail=1; \
+	python3 -m json.tool companion/webext/manifest.gecko.json >/dev/null || fail=1; \
 	if [ $$fail -eq 0 ]; then echo "check: clean"; else exit 1; fi
 
 # Unit tests for the pure modules. run.js redirects XDG_DATA_HOME to a scratch
