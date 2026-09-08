@@ -12,9 +12,10 @@ export const DIM_OPACITY = 160;
 
 // Callers pass the fill width in pixels rather than a percentage, because they
 // derive it differently: share of the day's total vs share of an app's limit.
-export function makeUsageBar(fillWidth, color) {
+// `trackWidth` lets an indented row shorten its bar so right edges line up.
+export function makeUsageBar(fillWidth, color, trackWidth = BAR_W) {
     let track = new St.BoxLayout({
-        style: `margin-top: 3px; height: 4px; width: ${BAR_W}px; ` +
+        style: `margin-top: 3px; height: 4px; width: ${trackWidth}px; ` +
                `background-color: ${TRACK_BG}; border-radius: 3px;`,
     });
     let fill = new St.Widget({
