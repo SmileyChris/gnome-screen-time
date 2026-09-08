@@ -16,7 +16,7 @@ import { encodeFrame, decodeFrames } from './framing.js';
 const BUS_NAME = 'org.gnome.Shell';
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime';
 const INTERFACE = 'org.gnome.Shell.Extensions.ScreenTime';
-const BROWSERS = ['brave', 'zen'];
+const BROWSERS = ['brave', 'zen', 'chrome'];
 const CALL_TIMEOUT_MS = 2000;
 // When the extension is disabled every call fails the same way; log it once
 // a minute rather than once per tab switch.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build and install helpers for the browser companion.
 
-    build.py build          -> dist/webext-brave/, dist/screen-time-brave.zip,
+    build.py build          -> dist/webext-brave/, dist/webext-chrome/, their zips,
                                dist/screen-time-zen.xpi
     build.py extension-id   -> Chromium extension id derived from manifest key
     build.py ping           -> framed {ping:true} to the host, expects {pong:true}
@@ -65,6 +65,9 @@ def build():
 
     brave_tree = write_tree('brave', base)
     zip_tree(brave_tree, os.path.join(DIST, 'screen-time-brave.zip'))
+    # Same Chromium build and id, a different browser constant.
+    chrome_tree = write_tree('chrome', base)
+    zip_tree(chrome_tree, os.path.join(DIST, 'screen-time-chrome.zip'))
 
     with open(os.path.join(WEBEXT, 'manifest.gecko.json')) as f:
         overlay = json.load(f)
@@ -74,7 +77,7 @@ def build():
     zen_tree = write_tree('zen', gecko)
     zip_tree(zen_tree, os.path.join(DIST, 'screen-time-zen.xpi'))
 
-    print(f'built {brave_tree} (id {extension_id(base)}) and {zen_tree}')
+    print(f'built {brave_tree}, {chrome_tree} (id {extension_id(base)}) and {zen_tree}')
 
 
 def ping():

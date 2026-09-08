@@ -9,7 +9,7 @@ example `github.com / anthropics/claude-code`.
 Only `{browser, host, detail}`. The browser id is a build-time constant from the
 generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`:
 
-- `browser`: `brave` or `zen`, a build-time constant.
+- `browser`: `brave`, `chrome` or `zen`, a build-time constant.
 - `host`: hostname, lowercased, one leading `www.` removed.
 - `detail`: `owner/repo` on github.com, gitlab.com, codeberg.org and
   bitbucket.org; `r/<sub>` on reddit.com and old.reddit.com; the first path
@@ -39,7 +39,7 @@ as a smoke test.
     make companion-install    # host manifests for Brave and Zen, pointing at this checkout
 
 Brave: `brave://extensions`, enable Developer mode, Load unpacked,
-choose `dist/webext-brave`. The manifest carries a fixed `key`, so the id is
+choose `dist/webext-brave`. Chrome: the same at `chrome://extensions` with `dist/webext-chrome`. The manifest carries a fixed `key`, so the id is
 stable and matches the host manifest.
 
 Zen: `about:config`, set `xpinstall.signatures.required` to `false`, then

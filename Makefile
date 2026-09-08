@@ -1,17 +1,18 @@
-UUID            = screen-time@gnome-screen-time
-VERSION         = 1.1.0
-EXTENSION_DIR   = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
-SRC_DIR         = src
-SCHEMAS_DIR     = $(SRC_DIR)/schemas
-DIST_DIR        = dist
-PACK_FILE       = $(DIST_DIR)/$(UUID).shell-extension.zip
-COMPANION_TOOL  = python3 companion/tools/build.py
-HOST_SCRIPT     = $(abspath companion/host/screen-time-host.js)
-HOST_MANIFEST   = org.gnome.shell.extensions.screen_time.json
-BRAVE_HOSTS_DIR = $(HOME)/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts
-ZEN_HOSTS_DIR   = $(HOME)/.mozilla/native-messaging-hosts
-EXTENSIONS_DIR  = $(HOME)/.local/share/gnome-shell/extensions
-DEV_UUID_FILE   = $(DIST_DIR)/.dev-uuid
+UUID             = screen-time@gnome-screen-time
+VERSION          = 1.1.0
+EXTENSION_DIR    = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
+SRC_DIR          = src
+SCHEMAS_DIR      = $(SRC_DIR)/schemas
+DIST_DIR         = dist
+PACK_FILE        = $(DIST_DIR)/$(UUID).shell-extension.zip
+COMPANION_TOOL   = python3 companion/tools/build.py
+HOST_SCRIPT      = $(abspath companion/host/screen-time-host.js)
+HOST_MANIFEST    = org.gnome.shell.extensions.screen_time.json
+BRAVE_HOSTS_DIR  = $(HOME)/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts
+CHROME_HOSTS_DIR = $(HOME)/.config/google-chrome/NativeMessagingHosts
+ZEN_HOSTS_DIR    = $(HOME)/.mozilla/native-messaging-hosts
+EXTENSIONS_DIR   = $(HOME)/.local/share/gnome-shell/extensions
+DEV_UUID_FILE    = $(DIST_DIR)/.dev-uuid
 
 .PHONY: all build schemas install uninstall reload unreload pack companion-build companion-install companion-uninstall lint check test clean restart
 
@@ -94,19 +95,22 @@ companion-build:
 # script in this checkout, so moving the repository means re-running this.
 companion-install:
 	@chmod +x $(HOST_SCRIPT)
-	@mkdir -p $(BRAVE_HOSTS_DIR) $(ZEN_HOSTS_DIR)
+	@mkdir -p $(BRAVE_HOSTS_DIR) $(CHROME_HOSTS_DIR) $(ZEN_HOSTS_DIR)
 	@id=$$($(COMPANION_TOOL) extension-id) && test -n "$$id" && \
 	sed -e 's|@PATH@|$(HOST_SCRIPT)|' -e "s|@BRAVE_ID@|$$id|" companion/host/brave.json.in > $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) && \
+	sed -e 's|@PATH@|$(HOST_SCRIPT)|' -e "s|@BRAVE_ID@|$$id|" companion/host/brave.json.in > $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) && \
 	sed -e 's|@PATH@|$(HOST_SCRIPT)|' companion/host/zen.json.in > $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST) && \
 	python3 -m json.tool $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) >/dev/null && \
+	python3 -m json.tool $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) >/dev/null && \
 	python3 -m json.tool $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST) >/dev/null && \
 	$(COMPANION_TOOL) ping && \
-	echo "Host registered for Brave (extension id $$id) and Zen." && \
+	echo "Host registered for Brave, Chrome (extension id $$id) and Zen." && \
 	echo "Brave: brave://extensions, Developer mode, Load unpacked, pick dist/webext-brave" && \
+	echo "Chrome: chrome://extensions, Developer mode, Load unpacked, pick dist/webext-chrome" && \
 	echo "Zen:   about:config xpinstall.signatures.required=false, then open dist/screen-time-zen.xpi"
 
 companion-uninstall:
-	@rm -f $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST)
+	@rm -f $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST)
 	@echo "Host manifests removed."
 
 # Syntax-check every module. `gjs -c` runs a string and does NOT check syntax;

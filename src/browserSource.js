@@ -5,6 +5,7 @@ import { OTHER_KEY } from './usageStore.js';
 export const BROWSER_APP_IDS = {
     'brave-browser.desktop': 'brave',
     'zen.desktop': 'zen',
+    'google-chrome.desktop': 'chrome',
 };
 export const BROWSERS = Object.values(BROWSER_APP_IDS);
 
