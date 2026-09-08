@@ -213,20 +213,109 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
     }
 
     // Live status of the browser companions, read from the running Shell
-    // extension over D-Bus and refreshed while the window is open.
+    // extension over D-Bus and refreshed while the window is open. Only
+    // browsers that are installed here or currently connected get a row; a
+    // not-connected one expands into the install steps for that browser.
     _addCompanionsGroup(page, window) {
-        const NAMES = { brave: 'Brave', chrome: 'Google Chrome', zen: 'Zen Browser' };
+        const BROWSERS = {
+            brave: {
+                name: 'Brave', appId: 'brave-browser.desktop',
+                hostsDir: '.config/BraveSoftware/Brave-Browser/NativeMessagingHosts',
+                steps: dist => `Open brave://extensions, turn on Developer mode, choose Load unpacked and pick ${dist}/webext-brave.`,
+            },
+            chrome: {
+                name: 'Google Chrome', appId: 'google-chrome.desktop',
+                hostsDir: '.config/google-chrome/NativeMessagingHosts',
+                steps: dist => `Open chrome://extensions, turn on Developer mode, choose Load unpacked and pick ${dist}/webext-chrome.`,
+            },
+            zen: {
+                name: 'Zen Browser', appId: 'zen.desktop',
+                hostsDir: '.mozilla/native-messaging-hosts',
+                steps: dist => `Open about:debugging#/runtime/this-firefox, choose Load Temporary Add-on and pick ${dist}/webext-zen/manifest.json (or install ${dist}/screen-time-zen.xpi with xpinstall.signatures.required set to false).`,
+            },
+        };
+        const HOST_MANIFEST = 'org.gnome.shell.extensions.screen_time.json';
+
         const group = new Adw.PreferencesGroup({
             title: 'Browser Companions',
-            description: 'Sites and page sections are only tracked while the companion extension is loaded in the browser. See companion/README.md.',
+            description: 'Break browser time down by site with the companion extension.',
         });
         page.add(group);
-        const rows = new Map();
-        for (const [id, name] of Object.entries(NAMES)) {
-            const row = new Adw.ActionRow({title: name, subtitle: 'Checking...'});
-            rows.set(id, row);
+
+        const installed = id => Gio.DesktopAppInfo.new(BROWSERS[id].appId) !== null;
+
+        // The host manifest doubles as the pointer to the checkout, which is
+        // where the built extension directories live.
+        const setupText = id => {
+            const file = Gio.File.new_for_path(GLib.build_filenamev(
+                [GLib.get_home_dir(), BROWSERS[id].hostsDir, HOST_MANIFEST]));
+            let hostPath = null;
+            try {
+                const [, bytes] = file.load_contents(null);
+                hostPath = JSON.parse(new TextDecoder().decode(bytes)).path;
+            } catch (e) {
+                return 'Run make companion-install in the gnome-screen-time checkout first.';
+            }
+            const repo = GLib.path_get_dirname(GLib.path_get_dirname(GLib.path_get_dirname(hostPath)));
+            return BROWSERS[id].steps(GLib.build_filenamev([repo, 'dist']));
+        };
+
+        const rows = new Map();   // id -> { kind, row }
+        let emptyRow = null;
+
+        const setRow = (id, kind, subtitle) => {
+            const current = rows.get(id);
+            if (current && current.kind === kind) {
+                current.row.subtitle = subtitle;
+                return;
+            }
+            if (current)
+                group.remove(current.row);
+            let row;
+            if (kind === 'setup') {
+                row = new Adw.ExpanderRow({title: BROWSERS[id].name, subtitle});
+                const body = new Adw.ActionRow({subtitle: setupText(id)});
+                body.subtitle_lines = 0;
+                row.add_row(body);
+            } else {
+                row = new Adw.ActionRow({title: BROWSERS[id].name, subtitle});
+            }
             group.add(row);
-        }
+            rows.set(id, { kind, row });
+        };
+        const dropRow = id => {
+            const current = rows.get(id);
+            if (current) {
+                group.remove(current.row);
+                rows.delete(id);
+            }
+        };
+
+        const render = list => {
+            const wanted = new Set();
+            for (const [id, host, connected, focused] of list) {
+                if (!BROWSERS[id] || !(connected || installed(id)))
+                    continue;
+                wanted.add(id);
+                if (!connected)
+                    setRow(id, 'setup', 'Not connected');
+                else if (!host)
+                    setRow(id, 'connected', 'Connected, no web page in the active tab');
+                else
+                    setRow(id, 'connected', focused ? `Connected, on ${host}` : `Connected, on ${host} (window not focused)`);
+            }
+            for (const id of [...rows.keys()]) {
+                if (!wanted.has(id))
+                    dropRow(id);
+            }
+            if (wanted.size === 0 && !emptyRow) {
+                emptyRow = new Adw.ActionRow({title: 'No supported browser found', subtitle: 'Brave, Google Chrome and Zen are supported.'});
+                group.add(emptyRow);
+            } else if (wanted.size > 0 && emptyRow) {
+                group.remove(emptyRow);
+                emptyRow = null;
+            }
+        };
 
         const refresh = () => {
             Gio.DBus.session.call(
@@ -234,24 +323,12 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                 'org.gnome.Shell.Extensions.ScreenTime', 'GetCompanions',
                 null, new GLib.VariantType('(a(ssbb))'), Gio.DBusCallFlags.NONE, 1000, null,
                 (conn, res) => {
-                    let list;
                     try {
-                        [list] = conn.call_finish(res).deepUnpack();
+                        const [list] = conn.call_finish(res).deepUnpack();
+                        render(list);
                     } catch (e) {
-                        for (const row of rows.values())
-                            row.subtitle = 'Screen Time extension is not running';
-                        return;
-                    }
-                    for (const [id, host, connected, focused] of list) {
-                        const row = rows.get(id);
-                        if (!row)
-                            continue;
-                        if (!connected)
-                            row.subtitle = 'Not connected. Load the companion extension in this browser.';
-                        else if (!host)
-                            row.subtitle = 'Connected, no web page in the active tab';
-                        else
-                            row.subtitle = focused ? `Connected, on ${host}` : `Connected, on ${host} (window not focused)`;
+                        // Extension not running: show installed browsers as not connected.
+                        render(Object.keys(BROWSERS).map(id => [id, '', false, false]));
                     }
                 });
         };
