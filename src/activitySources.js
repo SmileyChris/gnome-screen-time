@@ -75,7 +75,8 @@ export class ZellijSource {
             return null;
         }
         try {
-            let [, stdout] = await proc.communicate_utf8_async(null, this._cancellable);
+            // Gio._promisify drops the boolean, so the tuple is [stdout, stderr].
+            let [stdout] = await proc.communicate_utf8_async(null, this._cancellable);
             if (!proc.get_successful())
                 return null;
             return stdout;
