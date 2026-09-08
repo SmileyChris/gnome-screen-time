@@ -95,6 +95,10 @@ function mergeNode(into, from) {
         else
             into.children[id] = node;
     }
+    // A late-landing file can push a parent past the cap; fold back down so
+    // the storage bound holds regardless of which side each child came from.
+    while (namedCount(into.children) > MAX_CHILDREN)
+        foldSmallest(into.children);
 }
 
 // Adds seconds to siblings[id], creating it if needed. `cap` is null for

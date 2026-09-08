@@ -255,3 +255,34 @@ test('purge: purge-requested deletes days older than 7 over nested data', async 
         'purge saves immediately');
     store.destroy();
 });
+
+test('merge: a late file cannot leave a parent above MAX_CHILDREN', async () => {
+    let today = todayKey();
+    let onDisk = {};
+    for (let i = 0; i < MAX_CHILDREN; i++)
+        onDisk[`d${i}`] = { displayName: `d${i}`, seconds: 100 + i };
+    GLib.unlink(STORE_FILE);
+    Gio.File.new_for_path(STORE_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({
+            [today]: { kgx: { displayName: 'Console', seconds: 2190, children: onDisk } },
+        })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let store = new UsageStore(new FakeSettings());
+    // Two brand-new children tracked while the read is in flight.
+    store.addTime(['kgx', 'fresh-a'], ['Console', 'fresh-a'], 3);
+    store.addTime(['kgx', 'fresh-b'], ['Console', 'fresh-b'], 4);
+    await store.loaded;
+
+    let [entry] = store.getUsageForDate(today);
+    let children = sortedChildren(entry.children);
+    let named = children.filter(c => c.id !== OTHER_KEY);
+    let other = children.find(c => c.id === OTHER_KEY);
+    assertEqual(named.length, MAX_CHILDREN, 'cap holds after merge');
+    assertEqual(other.count, 2, 'two smallest were folded');
+    assertEqual(other.seconds, 7, 'fresh-a and fresh-b, the smallest, were folded');
+    assertEqual(entry.seconds, 2197);
+    let sum = children.reduce((s, c) => s + c.seconds, 0);
+    assertEqual(sum, entry.seconds, 'children still reconcile with the parent');
+    store.destroy();
+});
