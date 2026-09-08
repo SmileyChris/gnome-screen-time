@@ -42,6 +42,13 @@ export class UsageTracker {
         // screenShield only exists when GNOME can lock at all (GDM + systemd),
         // so presence detection treats it as optional; max-interval is the backstop.
         this._shield = Main.screenShield ?? null;
+        // Set by the idle monitor after `idle-timeout` seconds without input,
+        // cleared on the next input. Covers the case the shield never sees: a
+        // screen kept awake by a window while nobody is at the keyboard.
+        this._idle = false;
+        this._idleMonitor = global.backend.get_core_idle_monitor();
+        this._idleWatchId = 0;
+        this._activeWatchId = 0;
         this._away = this._computeAway();
 
         this._focusId = global.display.connect(
@@ -68,6 +75,58 @@ export class UsageTracker {
             GLib.PRIORITY_DEFAULT, FLUSH_INTERVAL,
             () => this._onFlushTick()
         );
+
+        this._armIdleWatch();
+        this._idleSettingId = this._settings.connect(
+            'changed::idle-timeout', () => this._armIdleWatch());
+    }
+
+    // (Re)installs the idle watch for the configured timeout. A timeout of 0
+    // disables idle detection. Called at start and whenever the setting changes.
+    _armIdleWatch() {
+        this._clearIdleWatches();
+        let seconds = this._settings.get_int('idle-timeout');
+        if (seconds <= 0) {
+            if (this._idle) {
+                this._idle = false;
+                this._onPresenceChanged();
+            }
+            return;
+        }
+        this._idleWatchId = this._idleMonitor.add_idle_watch(seconds * 1000,
+            () => this._onIdle());
+    }
+
+    _clearIdleWatches() {
+        if (this._idleWatchId) {
+            this._idleMonitor.remove_watch(this._idleWatchId);
+            this._idleWatchId = 0;
+        }
+        if (this._activeWatchId) {
+            this._idleMonitor.remove_watch(this._activeWatchId);
+            this._activeWatchId = 0;
+        }
+    }
+
+    // No input for the whole timeout. The idle watch keeps firing on every
+    // later idle period, so it stays installed; the active watch is one-shot
+    // and is armed here to catch the return.
+    _onIdle() {
+        if (this._idle)
+            return;
+        this._idle = true;
+        if (DEBUG)
+            console.log('[ScreenTime] idle');
+        this._onPresenceChanged();
+        if (this._activeWatchId)
+            this._idleMonitor.remove_watch(this._activeWatchId);
+        this._activeWatchId = this._idleMonitor.add_user_active_watch(() => {
+            this._activeWatchId = 0;   // one-shot, already removed by Mutter
+            this._idle = false;
+            if (DEBUG)
+                console.log('[ScreenTime] active');
+            this._onPresenceChanged();
+        });
     }
 
     _getMaxInterval() {
@@ -75,7 +134,7 @@ export class UsageTracker {
     }
 
     _computeAway() {
-        return !!(this._shield && (this._shield.active || this._shield.locked));
+        return this._idle || !!(this._shield && (this._shield.active || this._shield.locked));
     }
 
     _currentApp() {
@@ -245,6 +304,11 @@ export class UsageTracker {
             GLib.source_remove(this._flushId);
             this._flushId = null;
         }
+        if (this._idleSettingId) {
+            this._settings.disconnect(this._idleSettingId);
+            this._idleSettingId = null;
+        }
+        this._clearIdleWatches();
         this._flush(Date.now());
         this._resolveSeq++;   // drop any resolve still in flight
         this._sources.onChange = null;
