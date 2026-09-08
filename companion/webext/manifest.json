@@ -1,0 +1,11 @@
+{
+    "manifest_version": 3,
+    "name": "GNOME Screen Time companion",
+    "version": "0.1.0",
+    "description": "Tells the GNOME Screen Time extension which site the active tab is on. Only the site and a page section leave the browser, and only to this machine.",
+    "permissions": ["tabs", "nativeMessaging"],
+    "background": {
+        "service_worker": "background.js",
+        "type": "module"
+    }
+}
