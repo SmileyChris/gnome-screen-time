@@ -251,6 +251,29 @@ export class PopupWidget {
                 COLORS[(MAX_VISIBLE + i) % COLORS.length])));
             rows.push(row);
         }
+
+        // Below level 1, a node's own seconds is its direct time plus its
+        // children (see UsageStore.addTime), but direct time has no entry
+        // of its own: a terminal pane with no zellij session, or the
+        // interval before the source resolves, is credited to the parent
+        // only. Surface the gap as an unlabeled leaf so the visible rows
+        // still sum to the parent's total.
+        if (depth > 0) {
+            let childTotal = entries.reduce((s, e) => s + e.seconds, 0);
+            let direct = parentTotal - childTotal;
+            if (direct > 0) {
+                let row = makeRow({
+                    name: 'No breakdown',
+                    seconds: direct,
+                    pct: pctOf(direct, parentTotal),
+                    color: COLORS[(top.length + 1) % COLORS.length],
+                    depth,
+                    dim: true,
+                });
+                this._menu.addMenuItem(row.item);
+                rows.push(row);
+            }
+        }
         return rows;
     }
 
