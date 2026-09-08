@@ -1,5 +1,5 @@
 import Gio from 'gi://Gio';
-import { BROWSERS } from './browserSource.js';
+import { BROWSERS, MAX_ID_LENGTH } from './browserSource.js';
 
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime';
 
@@ -31,7 +31,8 @@ export class DbusService {
     ReportActiveTabAsync(params, invocation) {
         let [browser, host, detail] = params;
         if (!BROWSERS.includes(browser)) {
-            console.debug(`[ScreenTime] ignoring report for unknown browser ${browser}`);
+            let name = String(browser).slice(0, MAX_ID_LENGTH);
+            console.debug(`[ScreenTime] ignoring report for unknown browser ${name}`);
             invocation.return_value(null);
             return;
         }
@@ -53,14 +54,18 @@ export class DbusService {
         let key = `${sender}\0${browser}`;
         if (this._watches.has(key))
             return;
-        let id = Gio.bus_watch_name(
+        // The entry is captured so the vanish callback can release its own
+        // watch; leaving it would leak a watcher per browser run.
+        let entry = { id: 0, browser };
+        entry.id = Gio.bus_watch_name(
             Gio.BusType.SESSION, sender, Gio.BusNameWatcherFlags.NONE,
             null,
             () => {
+                Gio.bus_unwatch_name(entry.id);
                 this._watches.delete(key);
                 this._source?.clear(browser);
             });
-        this._watches.set(key, { id, browser });
+        this._watches.set(key, entry);
     }
 
     destroy() {

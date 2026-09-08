@@ -95,13 +95,19 @@ async function report() {
         lastSent = key;
     } catch (e) {
         console.error(`[screen-time] postMessage failed: ${e.message}`);
-        // Close the broken port so it cannot linger half-open. The
-        // onDisconnect guard above keeps its teardown off a replacement.
-        p.disconnect();
+        // Recover first: on Gecko, disconnecting an already-dead port
+        // throws, and that must not cost us the retry.
         port = null;
         lastSent = null;
         backOff();
         scheduleRetry();
+        // Close the broken port so it cannot linger half-open. The
+        // onDisconnect guard above keeps its teardown off a replacement.
+        try {
+            p.disconnect();
+        } catch {
+            // already gone
+        }
     }
 }
 
