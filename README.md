@@ -14,6 +14,7 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 - **App time limits:** set a daily limit per app and get a desktop notification once you cross it.
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
 - **Presence-aware:** time on the lock screen, while the screen is blanked, or while suspended is never counted.
+- **Activity breakdown:** inside a terminal running [zellij](https://zellij.dev), time splits by the focused pane's command and working directory. Expand any row to see it.
 - **Local only:** a plain JSON file on your disk. No network access, no telemetry.
 
 ## Requirements
@@ -64,6 +65,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
 - After **10 minutes without keyboard or mouse input** (Idle Timeout in preferences, 0 to disable) counting stops even if the screen stays on, unless something is inhibiting idle the way a playing video does, and resumes on the next input. Time up to the timeout is still counted, so a walk-away costs at most one timeout of over-count.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
+- Inside a **terminal running zellij**, time is further broken down by the focused pane's command and working directory (for example `claude` in `gnome-screen-time`), read from `zellij action dump-layout`. Only the session name is read from the window title; the pane title is never stored. Terminals not running zellij, and terminals not on the built-in list, are tracked as a single app. The zellij binary must be on GNOME Shell's PATH (a systemd user session often lacks ~/.cargo/bin and ~/.local/bin); if it is not found, terminals are tracked as a single app. Zellij sets the window title only when the focused pane's title changes, so a terminal that has just attached to an idle session stays at the app level until something in that pane retitles it.
 - A day runs from midnight by default. **Day Starts At** in preferences moves that boundary, so 4 keeps work between midnight and 4am on the day it started rather than opening a new one. Changing it is not retroactive: time already filed under a date stays there.
 
 ## Data
@@ -74,7 +76,7 @@ Usage is stored at:
 ~/.local/share/gnome-shell/screen-time/usage.json
 ```
 
-It is keyed by date, then by app, where the date is the logical day set by **Day Starts At**. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
+It is keyed by date, then by app, where the date is the logical day set by **Day Starts At**. An app may carry a `children` map (activity, then detail) when a breakdown source applies; the app's own `seconds` is always the total including its children, so older versions read the file as plain per-app data. Each parent keeps at most 20 named children per day; the rest fold into an `__other__` entry. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
 
 ## Development
 
@@ -102,6 +104,12 @@ make clean
 `make test` runs `tests/` under plain `gjs`, no Shell involved, so it covers the modules that import nothing from `resource:///org/gnome/shell`: `formatTime.js`, `appLimits.js` and `usageStore.js`. The runner points `XDG_DATA_HOME` at a scratch directory before importing anything, so a run cannot touch real usage data.
 
 GNOME 45+ caches an extension's modules for the life of the Shell, so re-enabling one never picks up new code, and Wayland cannot restart the Shell in place. `make reload` sidesteps both: it copies `src/` under a new dev UUID, disables the production copy, and asks the running Shell to load the new one through `org.gnome.Shell.Eval`. Eval answers only while Looking Glass's Unsafe Mode is on (Alt+F2, `lg`, the toggle in its top bar), which lasts for the login session; turn it back off when you are done iterating. `make unreload` removes the dev copy and re-enables the production UUID, and `make install` does the same automatically, so ending a dev session is just `make install`.
+
+Set `GNOME_SHELL_EXTENSION_SCREEN_TIME_DEBUG=1` in the Shell's environment (`systemctl --user set-environment ...`, then log in again) to log the resolved path on every focus change:
+
+```bash
+journalctl -f -o cat /usr/bin/gnome-shell | grep ScreenTime
+```
 
 The packaged archive is validated with [shexli](https://pypi.org/project/shexli/) before release:
 
