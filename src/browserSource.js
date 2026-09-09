@@ -6,6 +6,7 @@ export const BROWSER_APP_IDS = {
     'brave-browser.desktop': 'brave',
     'zen.desktop': 'zen',
     'google-chrome.desktop': 'chrome',
+    'firefox.desktop': 'firefox',
 };
 export const BROWSERS = Object.values(BROWSER_APP_IDS);
 

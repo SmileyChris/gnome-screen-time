@@ -7,8 +7,9 @@ test('browserSource: claims exactly the two browser app ids', () => {
     assert(s.claims('zen.desktop'));
     assert(!s.claims('firefox.desktop'));
     assert(!s.claims('org.gnome.Console.desktop'));
-    assertEqual(BROWSERS, ['brave', 'zen', 'chrome']);
+    assertEqual(BROWSERS, ['brave', 'zen', 'chrome', 'firefox']);
     assert(s.claims('google-chrome.desktop'));
+    assert(s.claims('firefox.desktop'));
 });
 
 test('browserSource: no state resolves to null', async () => {

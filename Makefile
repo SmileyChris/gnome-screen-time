@@ -107,7 +107,8 @@ companion-install:
 	echo "Host registered for Brave, Chrome (extension id $$id) and Zen." && \
 	echo "Brave: brave://extensions, Developer mode, Load unpacked, pick dist/webext-brave" && \
 	echo "Chrome: chrome://extensions, Developer mode, Load unpacked, pick dist/webext-chrome" && \
-	echo "Zen:   about:config xpinstall.signatures.required=false, then open dist/screen-time-zen.xpi"
+	echo "Zen:   about:config xpinstall.signatures.required=false, then open dist/screen-time-zen.xpi" && \
+	echo "Firefox: about:debugging, Load Temporary Add-on, pick dist/webext-firefox/manifest.json (same host manifest as Zen)"
 
 companion-uninstall:
 	@rm -f $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST)

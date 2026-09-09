@@ -229,6 +229,11 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                 hostsDir: '.config/google-chrome/NativeMessagingHosts',
                 steps: dist => `Open chrome://extensions, turn on Developer mode, choose Load unpacked and pick ${dist}/webext-chrome.`,
             },
+            firefox: {
+                name: 'Firefox', appId: 'firefox.desktop',
+                hostsDir: '.mozilla/native-messaging-hosts',
+                steps: dist => `Open about:debugging#/runtime/this-firefox, choose Load Temporary Add-on and pick ${dist}/webext-firefox/manifest.json (or install ${dist}/screen-time-firefox.xpi in a build that allows unsigned add-ons).`,
+            },
             zen: {
                 name: 'Zen Browser', appId: 'zen.desktop',
                 hostsDir: '.mozilla/native-messaging-hosts',
@@ -310,7 +315,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                     dropRow(id);
             }
             if (wanted.size === 0 && !emptyRow) {
-                emptyRow = new Adw.ActionRow({title: 'No supported browser found', subtitle: 'Brave, Google Chrome and Zen are supported.'});
+                emptyRow = new Adw.ActionRow({title: 'No supported browser found', subtitle: 'Brave, Google Chrome, Firefox and Zen are supported.'});
                 group.add(emptyRow);
             } else if (wanted.size > 0 && emptyRow) {
                 group.remove(emptyRow);

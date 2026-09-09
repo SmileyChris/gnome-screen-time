@@ -9,7 +9,7 @@ example `github.com / anthropics/claude-code`.
 Only `{browser, host, detail}`. The browser id is a build-time constant from the
 generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`:
 
-- `browser`: `brave`, `chrome` or `zen`, a build-time constant.
+- `browser`: `brave`, `chrome`, `firefox` or `zen`, a build-time constant.
 - `host`: hostname, lowercased, one leading `www.` removed.
 - `detail`: `owner/repo` on github.com, gitlab.com, codeberg.org and
   bitbucket.org; `r/<sub>` on reddit.com and old.reddit.com; the first path

@@ -76,8 +76,11 @@ def build():
     gecko.update(overlay)
     zen_tree = write_tree('zen', gecko)
     zip_tree(zen_tree, os.path.join(DIST, 'screen-time-zen.xpi'))
+    # Firefox: the same Gecko build and host manifest, a different browser constant.
+    firefox_tree = write_tree('firefox', gecko)
+    zip_tree(firefox_tree, os.path.join(DIST, 'screen-time-firefox.xpi'))
 
-    print(f'built {brave_tree}, {chrome_tree} (id {extension_id(base)}) and {zen_tree}')
+    print(f'built {brave_tree}, {chrome_tree} (id {extension_id(base)}), {zen_tree} and {firefox_tree}')
 
 
 def ping():
