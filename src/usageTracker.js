@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
@@ -7,6 +8,10 @@ import { ActivitySourceRegistry } from './activitySources.js';
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
 const FLUSH_INTERVAL = 30;
+// org.gnome.SessionManager inhibit flag for idle (GSM_INHIBITOR_FLAG_IDLE).
+const IDLE_INHIBIT_FLAG = 8;
+// While idle but inhibited, ask again this often.
+const IDLE_RECHECK_SECONDS = 60;
 
 // Nothing outside the compositor can read a window title here, so the only
 // way to see what a real desktop resolves to is a log line:
@@ -49,6 +54,7 @@ export class UsageTracker {
         this._idleMonitor = global.backend.get_core_idle_monitor();
         this._idleWatchId = 0;
         this._activeWatchId = 0;
+        this._idleRecheckId = 0;
         this._away = this._computeAway();
 
         this._focusId = global.display.connect(
@@ -106,27 +112,79 @@ export class UsageTracker {
             this._idleMonitor.remove_watch(this._activeWatchId);
             this._activeWatchId = 0;
         }
+        this._clearIdleRecheck();
     }
 
     // No input for the whole timeout. The idle watch keeps firing on every
     // later idle period, so it stays installed; the active watch is one-shot
     // and is armed here to catch the return.
+    // No input for the whole timeout. If something inhibits idle (a video,
+    // a presentation: the same inhibitors that stop the screensaver), the
+    // user is presumably still watching, so keep counting and look again in
+    // a minute. Otherwise go away until the next input.
     _onIdle() {
         if (this._idle)
             return;
-        this._idle = true;
-        if (DEBUG)
-            console.log('[ScreenTime] idle');
-        this._onPresenceChanged();
+        this._armActiveWatch();
+        this._checkIdleInhibited();
+    }
+
+    _checkIdleInhibited() {
+        this._idleRecheckId = 0;
+        Gio.DBus.session.call(
+            'org.gnome.SessionManager', '/org/gnome/SessionManager',
+            'org.gnome.SessionManager', 'IsInhibited',
+            new GLib.Variant('(u)', [IDLE_INHIBIT_FLAG]), null,
+            Gio.DBusCallFlags.NONE, 2000, null,
+            (conn, res) => {
+                let inhibited = false;
+                try {
+                    [inhibited] = conn.call_finish(res).deepUnpack();
+                } catch (e) {
+                    // No session manager to ask: fall back to plain idleness.
+                }
+                // The user came back while we were asking.
+                if (!this._activeWatchId)
+                    return;
+                if (inhibited) {
+                    if (DEBUG)
+                        console.log('[ScreenTime] idle, but idle is inhibited; still counting');
+                    this._idleRecheckId = GLib.timeout_add_seconds(
+                        GLib.PRIORITY_DEFAULT, IDLE_RECHECK_SECONDS, () => {
+                            this._idleRecheckId = 0;
+                            this._checkIdleInhibited();
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    return;
+                }
+                this._idle = true;
+                if (DEBUG)
+                    console.log('[ScreenTime] idle');
+                this._onPresenceChanged();
+            });
+    }
+
+    // One-shot: Mutter removes the watch when it fires.
+    _armActiveWatch() {
         if (this._activeWatchId)
-            this._idleMonitor.remove_watch(this._activeWatchId);
+            return;
         this._activeWatchId = this._idleMonitor.add_user_active_watch(() => {
-            this._activeWatchId = 0;   // one-shot, already removed by Mutter
-            this._idle = false;
-            if (DEBUG)
-                console.log('[ScreenTime] active');
-            this._onPresenceChanged();
+            this._activeWatchId = 0;
+            this._clearIdleRecheck();
+            if (this._idle) {
+                this._idle = false;
+                if (DEBUG)
+                    console.log('[ScreenTime] active');
+                this._onPresenceChanged();
+            }
         });
+    }
+
+    _clearIdleRecheck() {
+        if (this._idleRecheckId) {
+            GLib.source_remove(this._idleRecheckId);
+            this._idleRecheckId = 0;
+        }
     }
 
     _getMaxInterval() {
