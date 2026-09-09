@@ -31,6 +31,9 @@ install: build
 	@mkdir -p $(EXTENSION_DIR)
 	@cp -r $(SRC_DIR)/* $(EXTENSION_DIR)/
 	@echo "Installed to $(EXTENSION_DIR)"
+	@# A dev copy from `make reload` would otherwise stay enabled across
+	@# logins with production switched off; installing means we are done.
+	@if [ -f $(DEV_UUID_FILE) ]; then $(MAKE) --no-print-directory unreload; fi
 	@echo "Reload GNOME Shell: log out/in on Wayland, or Alt+F2 → 'r' on X11."
 
 # Live reload without logging out. GNOME 45+ caches an extension's ES modules
