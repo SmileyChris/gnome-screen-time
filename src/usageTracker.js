@@ -102,7 +102,10 @@ export class UsageTracker {
 
     // No input for the whole timeout. Something inhibiting idle (a video, a
     // presentation) means the user is still watching, so keep counting and
-    // look again in a minute; otherwise stop until the next input.
+    // look again in a minute; otherwise stop until the next input. Observed
+    // on GNOME 50 Wayland: Mutter already withholds idle watches while idle
+    // is inhibited, so this check rarely runs there; it stays as the
+    // backstop for sessions where it does not.
     _onIdle() {
         if (this._idle)
             return;
