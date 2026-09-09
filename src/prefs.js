@@ -266,58 +266,73 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             return BROWSERS[id].steps(GLib.build_filenamev([repo, 'dist']));
         };
 
-        const rows = new Map();   // id -> { kind, row }
+        // Connected browsers get their own row. Everything installed but not
+        // connected shares one collapsed expander so the group stays short.
+        const connectedRows = new Map();   // id -> Adw.ActionRow
+        let setupRow = null;               // Adw.ExpanderRow
+        let setupIds = '';                 // ids currently inside it, for cheap diffing
         let emptyRow = null;
 
-        const setRow = (id, kind, subtitle) => {
-            const current = rows.get(id);
-            if (current && current.kind === kind) {
-                current.row.subtitle = subtitle;
-                return;
+        const syncConnected = (id, subtitle) => {
+            let row = connectedRows.get(id);
+            if (!row) {
+                row = new Adw.ActionRow({title: BROWSERS[id].name});
+                group.add(row);
+                connectedRows.set(id, row);
             }
-            if (current)
-                group.remove(current.row);
-            let row;
-            if (kind === 'setup') {
-                row = new Adw.ExpanderRow({title: BROWSERS[id].name, subtitle});
-                const body = new Adw.ActionRow({subtitle: setupText(id)});
-                body.subtitle_lines = 0;
-                row.add_row(body);
-            } else {
-                row = new Adw.ActionRow({title: BROWSERS[id].name, subtitle});
-            }
-            group.add(row);
-            rows.set(id, { kind, row });
+            row.subtitle = subtitle;
         };
-        const dropRow = id => {
-            const current = rows.get(id);
-            if (current) {
-                group.remove(current.row);
-                rows.delete(id);
+        const syncSetup = ids => {
+            const key = ids.join(',');
+            if (key === setupIds)
+                return;
+            setupIds = key;
+            if (setupRow) {
+                group.remove(setupRow);
+                setupRow = null;
             }
+            if (ids.length === 0)
+                return;
+            setupRow = new Adw.ExpanderRow({
+                title: 'Not connected',
+                subtitle: ids.map(id => BROWSERS[id].name).join(', '),
+            });
+            for (const id of ids) {
+                const body = new Adw.ActionRow({title: BROWSERS[id].name, subtitle: setupText(id)});
+                body.subtitle_lines = 0;
+                setupRow.add_row(body);
+            }
+            group.add(setupRow);
         };
 
         const render = list => {
-            const wanted = new Set();
-            for (const [id, host, connected, focused] of list) {
-                if (!BROWSERS[id] || !(connected || installed(id)))
+            const connected = new Set();
+            const notConnected = [];
+            for (const [id, host, isConnected, focused] of list) {
+                if (!BROWSERS[id] || !(isConnected || installed(id)))
                     continue;
-                wanted.add(id);
-                if (!connected)
-                    setRow(id, 'setup', 'Not connected');
-                else if (!host)
-                    setRow(id, 'connected', 'Connected, no web page in the active tab');
+                if (!isConnected) {
+                    notConnected.push(id);
+                    continue;
+                }
+                connected.add(id);
+                if (!host)
+                    syncConnected(id, 'Connected, no web page in the active tab');
                 else
-                    setRow(id, 'connected', focused ? `Connected, on ${host}` : `Connected, on ${host} (window not focused)`);
+                    syncConnected(id, focused ? `Connected, on ${host}` : `Connected, on ${host} (window not focused)`);
             }
-            for (const id of [...rows.keys()]) {
-                if (!wanted.has(id))
-                    dropRow(id);
+            for (const id of [...connectedRows.keys()]) {
+                if (!connected.has(id)) {
+                    group.remove(connectedRows.get(id));
+                    connectedRows.delete(id);
+                }
             }
-            if (wanted.size === 0 && !emptyRow) {
+            syncSetup(notConnected);
+            const any = connected.size + notConnected.length > 0;
+            if (!any && !emptyRow) {
                 emptyRow = new Adw.ActionRow({title: 'No supported browser found', subtitle: 'Brave, Google Chrome, Firefox and Zen are supported.'});
                 group.add(emptyRow);
-            } else if (wanted.size > 0 && emptyRow) {
+            } else if (any && emptyRow) {
                 group.remove(emptyRow);
                 emptyRow = null;
             }

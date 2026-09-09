@@ -5,7 +5,7 @@ test('browserSource: claims exactly the two browser app ids', () => {
     let s = new BrowserSource();
     assert(s.claims('brave-browser.desktop'));
     assert(s.claims('zen.desktop'));
-    assert(!s.claims('firefox.desktop'));
+    assert(!s.claims('opera.desktop'));
     assert(!s.claims('org.gnome.Console.desktop'));
     assertEqual(BROWSERS, ['brave', 'zen', 'chrome', 'firefox']);
     assert(s.claims('google-chrome.desktop'));
@@ -43,7 +43,7 @@ test('browserSource: empty detail is two levels; empty host is no breakdown', as
 
 test('browserSource: unknown browser is ignored', async () => {
     let s = new BrowserSource();
-    assertEqual(s.setState('firefox', 'example.com', ''), false);
+    assertEqual(s.setState('opera', 'example.com', ''), false);
     assertEqual(await s.resolve({}, 'brave-browser.desktop'), null);
 });
 
