@@ -28,12 +28,12 @@ function loadUsageData() {
 }
 
 // Oldest first, so the chart reads left-to-right ending at today.
-function lastDays(data, count) {
+function lastDays(data, count, startHour) {
     let now = GLib.DateTime.new_now_local();
     let days = [];
     for (let i = count - 1; i >= 0; i--) {
         let day = now.add_days(-i);
-        let seconds = Object.values(data[dateKey(day)] ?? {})
+        let seconds = Object.values(data[dateKey(day, startHour)] ?? {})
             .reduce((s, a) => s + a.seconds, 0);
         days.push({
             label: i === 0 ? 'Today' : day.format('%a'),
@@ -142,6 +142,21 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         intervalGroup.add(intervalRow);
 
+        const dayStartRow = new Adw.SpinRow({
+            title: 'Day Starts At',
+            subtitle: 'Hour a new day begins. 4 keeps work after midnight on the previous day.',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 23,
+                step_increment: 1,
+            }),
+            value: settings.get_int('day-start-hour'),
+            snap_to_ticks: true,
+        });
+        settings.bind('day-start-hour', dayStartRow, 'value',
+            Gio.SettingsBindFlags.DEFAULT);
+        intervalGroup.add(dayStartRow);
+
         this._addLimitsGroup(page, settings, data);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
@@ -167,7 +182,8 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             description: `Total screen time over the last ${HISTORY_DAYS} days.`,
         });
         page.add(historyGroup);
-        historyGroup.add(buildHistogram(lastDays(data, HISTORY_DAYS)));
+        historyGroup.add(buildHistogram(
+            lastDays(data, HISTORY_DAYS, settings.get_int('day-start-hour'))));
 
         const purgeRow = new Adw.ActionRow({
             title: `Delete data older than ${HISTORY_DAYS} days`,

@@ -14,6 +14,12 @@
       <summary>Max tracking interval (seconds)</summary>
       <description>Maximum interval between focus events before capping to prevent skewed data after suspend.</description>
     </key>
+    <key name="day-start-hour" type="i">
+      <default>0</default>
+      <range min="0" max="23"/>
+      <summary>Hour a new day begins</summary>
+      <description>Time tracked before this hour counts towards the previous day, so work that runs past midnight stays on the day it started. 0 is midnight, the plain calendar day.</description>
+    </key>
     <key name="purge-requested" type="i">
       <default>0</default>
       <summary>Manual purge trigger</summary>

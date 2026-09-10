@@ -3,7 +3,7 @@ import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
-import { todayKey, dateKey } from './usageStore.js';
+import { todayKey, todayKeyFor, dateKey } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
 
@@ -43,8 +43,8 @@ function shiftKey(key, days) {
     return dateKey(keyToDate(key).add_days(days));
 }
 
-function labelForKey(key) {
-    let today = todayKey();
+function labelForKey(key, startHour) {
+    let today = todayKey(startHour);
     if (key === today)
         return 'Today';
     if (key === shiftKey(today, -1))
@@ -58,7 +58,7 @@ export class PopupWidget {
         this._store = store;
         this._settings = settings;
         this._openPrefs = openPrefs;
-        this._date = todayKey();
+        this._date = todayKeyFor(settings);
         this._timerSection = new AppTimerSection(store, settings);
 
         this._build();
@@ -69,7 +69,7 @@ export class PopupWidget {
     }
 
     _refresh() {
-        this._date = todayKey();
+        this._date = todayKeyFor(this._settings);
         this._timerSection.reset();
         this._build();
     }
@@ -79,8 +79,8 @@ export class PopupWidget {
     _earliestKey() {
         let retention = this._settings.get_int('retention-days');
         if (retention > 0)
-            return shiftKey(todayKey(), -retention);
-        return this._store.getOldestDate() ?? todayKey();
+            return shiftKey(todayKeyFor(this._settings), -retention);
+        return this._store.getOldestDate() ?? todayKeyFor(this._settings);
     }
 
     _build() {
@@ -146,7 +146,7 @@ export class PopupWidget {
         });
 
         let canPrev = this._date > this._earliestKey();
-        let canNext = this._date < todayKey();
+        let canNext = this._date < todayKeyFor(this._settings);
 
         row.add_child(this._navButton('go-previous-symbolic', canPrev, () => {
             this._date = shiftKey(this._date, -1);
@@ -154,7 +154,7 @@ export class PopupWidget {
         }));
 
         row.add_child(new St.Label({
-            text: labelForKey(this._date),
+            text: labelForKey(this._date, this._settings.get_int('day-start-hour')),
             x_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,

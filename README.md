@@ -64,6 +64,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
 - There is **no idle detection** while the screen is still on. If you walk away without the screen blanking, that time is still counted.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
+- A day runs from midnight by default. **Day Starts At** in preferences moves that boundary, so 4 keeps work between midnight and 4am on the day it started rather than opening a new one. Changing it is not retroactive: time already filed under a date stays there.
 
 ## Data
 
@@ -73,7 +74,7 @@ Usage is stored at:
 ~/.local/share/gnome-shell/screen-time/usage.json
 ```
 
-It is keyed by date, then by app. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
+It is keyed by date, then by app, where the date is the logical day set by **Day Starts At**. Delete the file to reset everything, or use **Delete data older than 7 days** in preferences. Anything older than the retention setting is removed automatically.
 
 ## Development
 
