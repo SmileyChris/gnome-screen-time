@@ -6,6 +6,10 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 
 ![Screen Time popup](assets/Look.gif)
 
+> **This is a fork** of [itsDigvijaysing/gnome-screen-time](https://github.com/itsdigvijaysing/gnome-screen-time), which is the original and where the design came from. It tracks upstream and adds idle detection, a breakdown of time *within* an app (terminal panes, browser sites), and editing of recorded entries. Some of that is [open upstream as pull requests](https://github.com/itsDigvijaysing/gnome-screen-time/pulls); the rest lives here.
+>
+> It keeps the original's extension UUID on purpose, so it installs **over** the original as a drop-in replacement rather than running alongside it. Both versions read the same `usage.json`, so switching either way keeps your history. If you also have the original installed from extensions.gnome.org, an update from there will replace this one; re-run `make install` to come back.
+
 ## Features
 
 - **Panel indicator:** today's total next to the clock, or just the icon if you prefer.
@@ -14,7 +18,10 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 - **App time limits:** set a daily limit per app and get a desktop notification once you cross it.
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
 - **Presence-aware:** time on the lock screen, while the screen is blanked, or while suspended is never counted.
-- **Local only:** a plain JSON file on your disk. No network access, no telemetry.
+- **Idle detection:** counting stops after 10 minutes without keyboard or mouse input, unless something is inhibiting idle the way a playing video does.
+- **Activity breakdown:** inside a terminal running [zellij](https://zellij.dev), time splits by the focused pane's command and working directory; in Brave, Chrome, Firefox and Zen with the companion extension, by site and repository or subreddit. Expand any row to see it.
+- **Editable history:** long-press a row to correct it with a slider, delete it, or delete a whole app's day, with one level of undo.
+- **Local only:** a plain JSON file on your disk. No network access, no telemetry. The browser companion sends only the site and a short path key, over a local native-messaging host.
 
 ## Requirements
 
@@ -23,7 +30,7 @@ GNOME Shell 47, 48, 49 or 50. X11 or Wayland.
 ## Install
 
 ```bash
-git clone https://github.com/itsdigvijaysing/gnome-screen-time
+git clone https://github.com/SmileyChris/gnome-screen-time
 cd gnome-screen-time
 make install
 ```
@@ -53,6 +60,7 @@ gnome-extensions prefs screen-time@gnome-screen-time
 |---|---|---|
 | Show total time in panel | On | Off shows only the icon. |
 | Max interval | 600s | Caps any single tracked stretch, so a stall can't dump hours onto one app. |
+| Idle timeout | 10 min | Stop counting after this long without input. `0` disables idle detection. |
 | App time limits | none | Per-app daily limit in minutes; notifies once per day when crossed. |
 | Retention days | 90 | How long history is kept. `0` keeps it forever. |
 
