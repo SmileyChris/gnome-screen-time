@@ -79,6 +79,7 @@ It is keyed by date, then by app. Delete the file to reset everything, or use **
 
 ```
 src/        extension sources, metadata.json, stylesheet.css, schemas/
+tests/      unit tests, run by `make test`
 dist/       packaged release archive (build output)
 assets/     screenshots
 ```
@@ -88,11 +89,14 @@ make            # compile the GSettings schema
 make install    # install to ~/.local/share/gnome-shell/extensions/
 make uninstall
 make check      # syntax-check every module + validate metadata.json
+make test       # unit tests under plain gjs (tests/)
 make pack       # build dist/screen-time@gnome-screen-time.shell-extension.zip
 make clean
 ```
 
 `make check` uses `gjs -m`. Note that `gjs -c` runs a string and does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.
+
+`make test` runs `tests/` under plain `gjs`, no Shell involved, so it covers the modules that import nothing from `resource:///org/gnome/shell`: `formatTime.js`, `appLimits.js` and `usageStore.js`. The runner points `XDG_DATA_HOME` at a scratch directory before importing anything, so a run cannot touch real usage data.
 
 The packaged archive is validated with [shexli](https://pypi.org/project/shexli/) before release:
 
