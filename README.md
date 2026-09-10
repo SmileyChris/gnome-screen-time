@@ -62,7 +62,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 
 - A video playing in an **unfocused** window is not counted: this measures interaction, not playback.
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
-- There is **no idle detection** while the screen is still on. If you walk away without the screen blanking, that time is still counted.
+- After **10 minutes without keyboard or mouse input** (Idle Timeout in preferences, 0 to disable) counting stops even if the screen stays on, unless something is inhibiting idle the way a playing video does, and resumes on the next input. Time up to the timeout is still counted, so a walk-away costs at most one timeout of over-count.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
 
 ## Data
