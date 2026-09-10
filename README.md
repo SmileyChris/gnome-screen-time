@@ -86,6 +86,8 @@ assets/     screenshots
 ```bash
 make            # compile the GSettings schema
 make install    # install to ~/.local/share/gnome-shell/extensions/
+make reload     # load src/ into the running Shell under a fresh dev UUID (no logout)
+make unreload   # back to the installed production copy
 make uninstall
 make check      # syntax-check every module + validate metadata.json
 make pack       # build dist/screen-time@gnome-screen-time.shell-extension.zip
@@ -93,6 +95,8 @@ make clean
 ```
 
 `make check` uses `gjs -m`. Note that `gjs -c` runs a string and does **not** check syntax. `ImportError` for `resource:///org/gnome/...` and missing `Shell` typelibs are expected outside a live Shell; only `SyntaxError` counts as a failure.
+
+GNOME 45+ caches an extension's modules for the life of the Shell, so re-enabling one never picks up new code, and Wayland cannot restart the Shell in place. `make reload` sidesteps both: it copies `src/` under a new dev UUID, disables the production copy, and asks the running Shell to load the new one through `org.gnome.Shell.Eval`. Eval answers only while Looking Glass's Unsafe Mode is on (Alt+F2, `lg`, the toggle in its top bar), which lasts for the login session; turn it back off when you are done iterating. `make unreload` removes the dev copy and re-enables the production UUID, and `make install` does the same automatically, so ending a dev session is just `make install`.
 
 The packaged archive is validated with [shexli](https://pypi.org/project/shexli/) before release:
 
