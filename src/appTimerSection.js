@@ -3,7 +3,7 @@ import Clutter from 'gi://Clutter';
 import Pango from 'gi://Pango';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
-import { todayKey } from './usageStore.js';
+import { todayKeyFor } from './usageStore.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
 import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
 
@@ -145,7 +145,7 @@ export class AppTimerSection {
         if (appIds.length === 0) {
             this._placeholder('No app timers set yet');
         } else {
-            let usage = this._store.getUsageForDate(todayKey());
+            let usage = this._store.getUsageForDate(todayKeyFor(this._settings));
             let usedById = new Map(usage.map(a => [a.appId, a]));
             for (let appId of appIds) {
                 let used = usedById.get(appId);

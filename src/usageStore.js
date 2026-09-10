@@ -19,12 +19,25 @@ export const OTHER_KEY = '__other__';
 
 // Date keys double as the on-disk JSON keys, so this format is a storage
 // contract, so every caller formats through here rather than repeating it.
-export function dateKey(dateTime) {
-    return dateTime.format('%Y-%m-%d');
+//
+// `startHour` moves the boundary between days off midnight, so work that runs
+// past it still counts towards the day it started on. The hours are subtracted
+// from the timestamp before the date is read, which leaves DST to GLib. Pass
+// it only for a real instant: a key shifted by whole days is already a logical
+// day and must not be offset again.
+export function dateKey(dateTime, startHour = 0) {
+    let at = startHour > 0 ? dateTime.add_hours(-startHour) : dateTime;
+    return at.format('%Y-%m-%d');
 }
 
-export function todayKey() {
-    return dateKey(GLib.DateTime.new_now_local());
+export function todayKey(startHour = 0) {
+    return dateKey(GLib.DateTime.new_now_local(), startHour);
+}
+
+// What the callers holding a settings object want: today, for whichever day
+// boundary the user configured. One place knows the key's name.
+export function todayKeyFor(settings) {
+    return todayKey(settings.get_int('day-start-hour'));
 }
 
 // appId -> displayName for every app that appears anywhere in `data`. Shared
@@ -136,10 +149,19 @@ export class UsageStore {
         this._purgeId = settings.connect(
             'changed::purge-requested', () => { this._onPurgeRequested(); }
         );
+        // Moving the boundary re-labels which day "today" is, so anything
+        // showing a total has to redraw even though no time was tracked.
+        this._dayStartId = settings.connect(
+            'changed::day-start-hour', () => { this.onChange?.(); }
+        );
     }
 
     _getRetentionDays() {
         return this._settings.get_int('retention-days');
+    }
+
+    _dayStartHour() {
+        return this._settings.get_int('day-start-hour');
     }
 
     _ensureDir() {
@@ -221,7 +243,8 @@ export class UsageStore {
     }
 
     _deleteOlderThan(days) {
-        let cutoffKey = dateKey(GLib.DateTime.new_now_local().add_days(-days));
+        let cutoffKey = dateKey(
+            GLib.DateTime.new_now_local().add_days(-days), this._dayStartHour());
         let changed = false;
         for (let key in this._data) {
             if (key < cutoffKey) {
@@ -238,7 +261,7 @@ export class UsageStore {
     // or [appId, activityId, detailId]), so a level-1 total is always its own
     // direct time plus its children. `names` are the matching display names.
     addTime(path, names, seconds) {
-        let today = todayKey();
+        let today = todayKey(this._dayStartHour());
         let day = this._data[today] ??= {};
         let secs = Math.round(seconds);
         let siblings = day;
@@ -361,7 +384,7 @@ export class UsageStore {
     }
 
     getTodayTotal() {
-        return this.getTotalForDate(todayKey());
+        return this.getTotalForDate(todayKey(this._dayStartHour()));
     }
 
     // Per-app usage for one day, biggest first, unfiltered. Callers decide
@@ -412,6 +435,10 @@ export class UsageStore {
         if (this._purgeId) {
             this._settings.disconnect(this._purgeId);
             this._purgeId = null;
+        }
+        if (this._dayStartId) {
+            this._settings.disconnect(this._dayStartId);
+            this._dayStartId = null;
         }
         this._save();
     }
