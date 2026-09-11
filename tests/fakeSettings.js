@@ -1,9 +1,9 @@
 import GLib from 'gi://GLib';
 
 // Just enough of Gio.Settings for UsageStore: integer reads,
-// `changed::<key>` signals that a test can fire by hand, and the
-// variant-typed keys clients.js reads and writes (`clients`, a(sbb), and
-// `last-client`, s).
+// `changed::<key>` signals that a test can fire by hand, the variant-typed
+// keys clients.js reads and writes (`clients`, a(sbb), and `last-client`,
+// s), and the booleans panelMode.js's migration reads and writes.
 export class FakeSettings {
     constructor(ints = {}) {
         this._ints = {
@@ -11,7 +11,8 @@ export class FakeSettings {
             'interval-retention-days': 30, ...ints,
         };
         this._values = { clients: new GLib.Variant('a(sbb)', []) };
-        this._strings = { 'last-client': '' };
+        this._strings = { 'last-client': '', 'panel-time': 'screen' };
+        this._booleans = { 'show-total-in-panel': true, 'panel-time-migrated': false };
         this._handlers = new Map();
         this._nextId = 1;
     }
@@ -22,6 +23,17 @@ export class FakeSettings {
 
     set_int(key, value) {
         this._ints[key] = value;
+        this.emit(`changed::${key}`);
+    }
+
+    // Stored like the other typed keys (_ints, _strings): a plain object,
+    // emitting the same `changed::<key>` signal on write.
+    get_boolean(key) {
+        return this._booleans[key];
+    }
+
+    set_boolean(key, value) {
+        this._booleans[key] = value;
         this.emit(`changed::${key}`);
     }
 

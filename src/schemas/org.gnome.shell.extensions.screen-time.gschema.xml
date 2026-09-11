@@ -68,5 +68,20 @@
       <summary>Toggle the clock</summary>
       <description>Keyboard shortcut that stops the running clock, or starts the most recently used client. Unset by default, because many combinations are already claimed by the desktop.</description>
     </key>
+    <key name="panel-time" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="client"/>
+        <choice value="screen"/>
+      </choices>
+      <default>"screen"</default>
+      <summary>What the panel shows next to the icon</summary>
+      <description>"screen" shows today's total screen time, "client" shows the running clock (or today's billed total when the clock is stopped), "none" shows only the icon. A dot marks a running clock in every mode.</description>
+    </key>
+    <key name="panel-time-migrated" type="b">
+      <default>false</default>
+      <summary>Panel setting migration marker</summary>
+      <description>Internal, not user-facing. Set once panel-time has taken its value from the older show-total-in-panel boolean.</description>
+    </key>
   </schema>
 </schemalist>

@@ -119,13 +119,17 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         const panelGroup = new Adw.PreferencesGroup({title: 'Panel'});
         page.add(panelGroup);
 
-        const showTotalRow = new Adw.SwitchRow({
-            title: 'Show total time in panel',
-            subtitle: 'Off shows only the icon.',
+        const panelRow = new Adw.ComboRow({
+            title: 'Show in panel',
+            subtitle: 'A dot always marks a running clock, whichever you pick.',
+            model: Gtk.StringList.new(['Nothing', 'Client time', 'Screen time']),
         });
-        settings.bind('show-total-in-panel', showTotalRow, 'active',
-            Gio.SettingsBindFlags.DEFAULT);
-        panelGroup.add(showTotalRow);
+        const PANEL_MODES = ['none', 'client', 'screen'];
+        panelRow.selected = Math.max(0, PANEL_MODES.indexOf(settings.get_string('panel-time')));
+        panelRow.connect('notify::selected', () => {
+            settings.set_string('panel-time', PANEL_MODES[panelRow.selected]);
+        });
+        panelGroup.add(panelRow);
 
         const intervalGroup = new Adw.PreferencesGroup({title: 'Tracking'});
         page.add(intervalGroup);

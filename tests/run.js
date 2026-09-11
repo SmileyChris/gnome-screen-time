@@ -24,6 +24,7 @@ const FILES = [
     './timeExport.test.js',
     './clockTime.test.js',
     './clients.test.js',
+    './panelMode.test.js',
     './accelerators.test.js',
     './activitySources.test.js',
     './browserSource.test.js',

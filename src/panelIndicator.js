@@ -3,7 +3,7 @@ import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import { formatTime } from './formatTime.js';
+import { panelLabelText } from './panelMode.js';
 
 export const PanelIndicator = class extends PanelMenu.Button {
     static {
@@ -20,6 +20,13 @@ export const PanelIndicator = class extends PanelMenu.Button {
             icon_name: 'alarm-symbolic',
             style_class: 'system-status-icon',
         }));
+        this._dot = new St.Label({
+            text: '●',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'padding-left: 4px; font-size: 9px;',
+            visible: false,
+        });
+        hbox.add_child(this._dot);
         this._label = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
@@ -29,7 +36,8 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this.add_child(hbox);
 
         this._totalSeconds = 0;
-        this._showTotal = true;
+        this._mode = 'screen';
+        this._clock = { running: false, away: false, client: '', seconds: 0 };
         this._updateLabel();
     }
 
@@ -42,17 +50,26 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._updateLabel();
     }
 
-    setShowTotal(show) {
-        this._showTotal = show;
+    setMode(mode) {
+        this._mode = mode;
         this._updateLabel();
     }
 
-    // Hidden rather than blank when there is nothing to show, so the panel
-    // doesn't reserve dead space next to the icon.
+    setClock(state) {
+        this._clock = state;
+        this._updateLabel();
+    }
+
+    // The dot shows in every mode, `none` included: whether the clock is
+    // running is the one thing the panel must answer without a click.
+    // Hollow means away but still counting.
     _updateLabel() {
-        let visible = this._showTotal && this._totalSeconds > 0;
-        this._label.visible = visible;
-        if (visible)
-            this._label.text = formatTime(this._totalSeconds);
+        this._dot.visible = this._clock.running;
+        this._dot.text = this._clock.away ? '○' : '●';
+
+        let text = panelLabelText(this._mode, this._totalSeconds, this._clock);
+        this._label.visible = text.length > 0;
+        if (this._label.visible)
+            this._label.text = text;
     }
 };

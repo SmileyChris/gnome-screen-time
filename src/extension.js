@@ -7,8 +7,9 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { PanelIndicator } from './panelIndicator.js';
 import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
-import { UsageStore } from './usageStore.js';
+import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
+import { migratePanelSetting } from './panelMode.js';
 import { IntervalLog } from './intervalLog.js';
 import { LimitNotifier } from './limitNotifier.js';
 import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
@@ -53,11 +54,22 @@ export default class ScreenTimeExtension extends Extension {
 
         this._heartbeatId = GLib.timeout_add_seconds(
             GLib.PRIORITY_DEFAULT, 30,
-            () => { this._clock.heartbeat(); return GLib.SOURCE_CONTINUE; });
+            () => {
+                this._clock.heartbeat();
+                this._syncPanelClock();
+                return GLib.SOURCE_CONTINUE;
+            });
 
+        migratePanelSetting(this._settings);
         this._settings.connectObject(
-            'changed::show-total-in-panel', () => this._syncPanelLabel(), this);
+            'changed::panel-time', () => this._syncPanelLabel(), this);
         this._syncPanelLabel();
+
+        // Must be set before ClockDBus is constructed below - see the
+        // comment there.
+        this._clock.onChange = () => this._syncPanelClock();
+        this._tracker.onAway = () => this._syncPanelClock();
+        this._syncPanelClock();
 
         // ClockDBus wraps clock.onChange, chaining through whatever handler
         // is already there. Any code that wants to set clock.onChange
@@ -125,8 +137,17 @@ export default class ScreenTimeExtension extends Extension {
     }
 
     _syncPanelLabel() {
-        this._indicator.setShowTotal(
-            this._settings.get_boolean('show-total-in-panel'));
+        this._indicator.setMode(this._settings.get_string('panel-time'));
+    }
+
+    _syncPanelClock() {
+        let running = this._clock.running;
+        this._indicator.setClock({
+            running: running !== null,
+            away: this._tracker?.away ?? false,
+            client: running?.client ?? '',
+            seconds: this._clock.billedSecondsForDay(todayKeyFor(this._settings)),
+        });
     }
 
     disable() {
