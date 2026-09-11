@@ -568,3 +568,216 @@ test('ClockStore: update still accepts endMs: null for a session that is already
     assertEqual(clock.running.id, session.id, 'still the running session');
     clock.destroy();
 });
+
+// --- update() type validation ---
+//
+// update() is reached from D-Bus (UpdateSession(id, fieldsJson) ->
+// JSON.parse() -> update()), so `fields` can carry any JSON-representable
+// type at all. Each of these must throw 'invalid' before touching the
+// session; the full record is compared before and after to prove nothing
+// was mutated on the way to the throw.
+
+function expectInvalid(clock, session, fields) {
+    let before = JSON.parse(JSON.stringify(session));
+    let threw = null;
+    try {
+        clock.update(session.id, fields);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(session, before, 'the session is completely unchanged');
+}
+
+test('ClockStore: update rejects a non-numeric billedHours', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { billedHours: 'x' });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a negative billedHours', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { billedHours: -1 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects an infinite billedHours', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { billedHours: Infinity });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a non-string description', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { description: 42 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a non-numeric startMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { startMs: 'abc' });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a NaN startMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    // Every comparison against NaN is false, so the overlap/backwards checks
+    // alone would let this straight through.
+    expectInvalid(clock, session, { startMs: NaN });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a non-integer startMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { startMs: t + 0.5 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a non-numeric endMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { endMs: 'abc' });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a non-integer endMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { endMs: t + 3600000.5 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects an empty client', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { client: '' });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a whitespace-only client', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { client: '   ' });
+    clock.destroy();
+});
+
+test('ClockStore: update ignores an explicit endMs: undefined on a closed session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let before = JSON.parse(JSON.stringify(session));
+    let updated = clock.update(session.id, { endMs: undefined });
+    assertEqual(updated, before, 'undefined is treated as absent, not as a reopen attempt');
+    assertEqual(session, before, 'the session is unchanged');
+    clock.destroy();
+});
+
+// --- _load() type validation ---
+//
+// clock.json can be hand-edited or partially corrupted between runs. A
+// record failing these same per-field rules must be excluded from memory,
+// never left to poison a billed total with NaN, and the original file must
+// be preserved byte-for-byte before anything is dropped.
+
+function listBackupFiles() {
+    let dir = Gio.File.new_for_path(GLib.path_get_dirname(CLOCK_FILE));
+    let names = [];
+    let enumerator = dir.enumerate_children(
+        'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+    let info;
+    while ((info = enumerator.next_file(null)) !== null) {
+        if (info.get_name().startsWith('clock.json.invalid-'))
+            names.push(info.get_name());
+    }
+    enumerator.close(null);
+    return names;
+}
+
+function deleteBackupFiles() {
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    for (let name of listBackupFiles())
+        Gio.File.new_for_path(GLib.build_filenamev([dir, name])).delete(null);
+}
+
+test('ClockStore: load excludes an invalid record, keeps the valid one, and backs up the file once', () => {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    let t = at(2026, 9, 11, 9, 0);
+    let valid = openSession('valid-1', 'ACME', t, t + 3600000);
+    valid.endMs = t + 3600000;
+    let invalid = openSession('invalid-1', 'BETA', t + 3600000, t + 7200000);
+    invalid.endMs = t + 7200000;
+    invalid.startMs = 'abc';   // the corruption
+    let raw = JSON.stringify({ sessions: [valid, invalid] });
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(raw), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    let day = clock.sessionsForDay('2026-09-11');
+    assertEqual(day.map(s => s.id), ['valid-1'], 'the invalid record is excluded, the valid one kept');
+    assert(Number.isFinite(clock.billedSecondsForDay('2026-09-11', t + 7200000)),
+        'the day total stays finite despite the excluded record');
+
+    let backups = listBackupFiles();
+    assertEqual(backups.length, 1, 'exactly one backup written for the whole load');
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    let [, backupBytes] = Gio.File.new_for_path(
+        GLib.build_filenamev([dir, backups[0]])).load_contents(null);
+    assertEqual(new TextDecoder().decode(backupBytes), raw, 'the backup is byte-for-byte the original file');
+
+    deleteBackupFiles();
+    clock.destroy();
+});
+
+test('ClockStore: load fills in defaults for a record missing interrupted/cleanStop/exportedAt, no backup', () => {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    let t = at(2026, 9, 11, 9, 0);
+    let minimal = {
+        id: 'minimal-1', client: 'ACME', dayKey: '2026-09-11',
+        startMs: t, endMs: t + 3600000, lastSeenMs: t + 3600000,
+        billedHours: null, description: '',
+        // interrupted, cleanStop, exportedAt intentionally omitted
+    };
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: [minimal] })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    let [session] = clock.sessionsForDay('2026-09-11');
+    assertEqual(session.interrupted, false);
+    assertEqual(session.cleanStop, false);
+    assertEqual(session.exportedAt, null);
+    assertEqual(listBackupFiles().length, 0, 'missing optional fields are not corruption; no backup');
+    clock.destroy();
+});

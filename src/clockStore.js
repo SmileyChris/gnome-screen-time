@@ -25,6 +25,85 @@ function newId() {
 // make the whole call fail.
 const UPDATABLE_FIELDS = ['billedHours', 'description', 'startMs', 'endMs', 'client'];
 
+function isFiniteInteger(value) {
+    return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value);
+}
+
+function isFiniteNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+// Per-field type rules shared by update() and _load(). update() is reached
+// from D-Bus (UpdateSession(id, fieldsJson) -> JSON.parse() -> update()), so
+// a payload from another process can carry any type at all; _load() reads a
+// clock.json that could equally be hand-edited or partially corrupted. Both
+// are untrusted input crossing a trust boundary into billing data, so one
+// function is used by both rather than risking the two sets of rules
+// drifting apart. `default: true` covers keys neither caller ever passes
+// here (update()'s allowlist and _load()'s field list both call this only
+// with keys they know about).
+function isValidField(key, value) {
+    switch (key) {
+    case 'id':
+    case 'client':
+        return typeof value === 'string' && value.trim().length > 0;
+    case 'dayKey':
+    case 'description':
+        return typeof value === 'string';
+    case 'startMs':
+    case 'lastSeenMs':
+        return isFiniteInteger(value);
+    case 'endMs':
+        return value === null || isFiniteInteger(value);
+    case 'billedHours':
+        return value === null || (isFiniteNumber(value) && value >= 0);
+    case 'interrupted':
+    case 'cleanStop':
+        return typeof value === 'boolean';
+    case 'exportedAt':
+        return value === null || isFiniteNumber(value);
+    default:
+        return true;
+    }
+}
+
+// A record loaded from clock.json is the full shape start()/recover() write,
+// not the partial field set update() accepts. Booleans and exportedAt are
+// tolerated when absent and default below; everything else is required.
+const REQUIRED_RECORD_FIELDS =
+    ['id', 'client', 'dayKey', 'startMs', 'endMs', 'lastSeenMs', 'billedHours', 'description'];
+const OPTIONAL_RECORD_FIELDS = ['interrupted', 'cleanStop', 'exportedAt'];
+
+function isValidSessionRecord(record) {
+    if (typeof record !== 'object' || record === null)
+        return false;
+    for (let key of REQUIRED_RECORD_FIELDS) {
+        if (!isValidField(key, record[key]))
+            return false;
+    }
+    for (let key of OPTIONAL_RECORD_FIELDS) {
+        if (key in record && record[key] !== undefined && !isValidField(key, record[key]))
+            return false;
+    }
+    return true;
+}
+
+function normalizeSessionRecord(record) {
+    return {
+        id: record.id,
+        client: record.client,
+        dayKey: record.dayKey,
+        startMs: record.startMs,
+        endMs: record.endMs,
+        lastSeenMs: record.lastSeenMs,
+        billedHours: record.billedHours,
+        description: record.description,
+        interrupted: record.interrupted ?? false,
+        cleanStop: record.cleanStop ?? false,
+        exportedAt: record.exportedAt ?? null,
+    };
+}
+
 export class ClockStore {
     constructor(settings) {
         this._settings = settings;
@@ -80,10 +159,41 @@ export class ClockStore {
         try {
             let [, contents] = file.load_contents(null);
             let data = JSON.parse(new TextDecoder().decode(contents));
-            this._sessions = data.sessions ?? [];
+            let records = Array.isArray(data.sessions) ? data.sessions : [];
+            let valid = [];
+            let invalidCount = 0;
+            for (let record of records) {
+                if (isValidSessionRecord(record))
+                    valid.push(normalizeSessionRecord(record));
+                else
+                    invalidCount++;
+            }
+            // Never silently discard a billing record: an invalid one is
+            // excluded from memory, but the file it came from is preserved
+            // byte-for-byte first - once per load, not once per record.
+            if (invalidCount > 0) {
+                let backupPath = this._backupCorruptFile(contents);
+                console.error(`[ScreenTime] clock load: excluded ${invalidCount} invalid ` +
+                    `session record(s); original backed up to ${backupPath}`);
+            }
+            this._sessions = valid;
         } catch (e) {
             console.error(`[ScreenTime] clock load error: ${e.message}`);
         }
+    }
+
+    // Copies the as-loaded bytes verbatim, before anything is excluded, so a
+    // corrupt file's only copy is never just the records this run managed to
+    // parse.
+    _backupCorruptFile(contents) {
+        let backupPath = `${CLOCK_FILE}.invalid-${Math.floor(Date.now() / 1000)}`;
+        try {
+            Gio.File.new_for_path(backupPath).replace_contents(
+                contents, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        } catch (e) {
+            console.error(`[ScreenTime] clock backup error: ${e.message}`);
+        }
+        return backupPath;
     }
 
     _save() {
@@ -230,8 +340,20 @@ export class ClockStore {
 
         let allowed = {};
         for (let key of UPDATABLE_FIELDS) {
-            if (key in fields)
-                allowed[key] = fields[key];
+            if (!(key in fields))
+                continue;
+            let value = fields[key];
+            // A key present with an explicit `undefined` value is treated as
+            // absent rather than as a request to write `undefined`: JSON
+            // from a D-Bus caller cannot carry `undefined`, but a payload
+            // built by hand can, and writing it through would bypass the
+            // reopen guard below and poison billing with NaN just like a
+            // bad type would.
+            if (value === undefined)
+                continue;
+            if (!isValidField(key, value))
+                throw new Error('invalid');
+            allowed[key] = value;
         }
 
         let next = { ...session, ...allowed };
