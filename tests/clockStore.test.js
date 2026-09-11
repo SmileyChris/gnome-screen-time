@@ -166,3 +166,217 @@ test('ClockStore: billedSecondsForDay clamps a stray open session to its lastSee
         'the running session accrues to now; the stray one stops at its own lastSeenMs');
     clock.destroy();
 });
+
+test('ClockStore: heartbeat advances lastSeenMs and persists it', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);
+    // destroySilently(), not destroy(): destroy() now closes the running
+    // session cleanly (Step 4), which would stamp endMs/lastSeenMs with the
+    // real current time and defeat this test's purpose of checking that the
+    // heartbeat's own write reached disk. See task-5-report.md for detail.
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    assertEqual(reopened.running.lastSeenMs, t + 30000, 'the heartbeat reached disk');
+    reopened.destroy();
+});
+
+test('ClockStore: recover resumes a session whose heartbeat is recent', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    let interrupted = reopened.recover(t + 60000);
+    assertEqual(interrupted, null);
+    assert(reopened.running !== null, 'a 30s gap is a Shell restart, not an ended session');
+    reopened.destroy();
+});
+
+test('ClockStore: recover closes a stale session at its last heartbeat', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    let interrupted = reopened.recover(t + 7200000);
+    assertEqual(reopened.running, null);
+    assertEqual(interrupted.endMs, t + 30000, 'billed to the last heartbeat, not to now');
+    assertEqual(interrupted.interrupted, true);
+    reopened.destroy();
+});
+
+test('ClockStore: closeForShutdown marks a clean stop', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.closeForShutdown(t + 3600000);
+    let [session] = clock.sessionsForDay('2026-09-11');
+    assertEqual(session.endMs, t + 3600000);
+    assertEqual(session.cleanStop, true);
+    assertEqual(session.interrupted, false);
+    clock.destroy();
+});
+
+test('ClockStore: update accepts a billed value of zero', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.update(session.id, { billedHours: 0 });
+    assertEqual(clock.billedSecondsForDay('2026-09-11', t + 3600000), 0,
+        'a deliberately zeroed session bills nothing, not its actual hour');
+    clock.destroy();
+});
+
+test('ClockStore: update sets billed hours and description', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 4680000);          // 1.30h actual
+    let updated = clock.update(session.id, { billedHours: 1.25, description: 'invoicing setup' });
+    assertEqual(updated.billedHours, 1.25);
+    assertEqual(updated.description, 'invoicing setup');
+    assertEqual(updated.endMs - updated.startMs, 4680000, 'actual is untouched by the adjustment');
+    assertEqual(clock.billedSecondsForDay('2026-09-11', t + 4680000), 4500);
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a start time that overlaps a neighbour', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let second = clock.start('BETA', t + 3600000);
+    clock.stop(t + 7200000);
+
+    let threw = null;
+    try {
+        clock.update(second.id, { startMs: t + 1800000 });
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'overlap');
+    assertEqual(clock.sessionsForDay('2026-09-11')[1].startMs, t + 3600000, 'unchanged');
+    clock.destroy();
+});
+
+test('ClockStore: update accepts a start time that just touches a neighbour', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let second = clock.start('BETA', t + 5400000);
+    clock.stop(t + 7200000);
+    let updated = clock.update(second.id, { startMs: t + 3600000 });
+    assertEqual(updated.startMs, t + 3600000, 'end-to-start contact is not an overlap');
+    clock.destroy();
+});
+
+test('ClockStore: update rejects an end before the start', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let threw = null;
+    try {
+        clock.update(session.id, { endMs: t - 1000 });
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'backwards');
+    clock.destroy();
+});
+
+test('ClockStore: remove deletes a session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    assertEqual(clock.remove(session.id), true);
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 0);
+    assertEqual(clock.remove(session.id), false, 'removing twice is not an error');
+    clock.destroy();
+});
+
+test('ClockStore: sessionsInRange returns anything intersecting the range', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.start('BETA', t + 7200000);
+    clock.stop(t + 10800000);
+    let hit = clock.sessionsInRange(t + 1800000, t + 1900000);
+    assertEqual(hit.map(s => s.client), ['ACME'], 'partial overlap counts');
+    assertEqual(clock.sessionsInRange(t, t + 10800000).length, 2);
+    assertEqual(clock.sessionsInRange(t + 4000000, t + 5000000).length, 0);
+    clock.destroy();
+});
+
+// Not from the brief: covers the "every other open session is closed
+// unconditionally" requirement for recover() (task instructions, not the
+// brief's single-session sample code). Only one clock can run at a time, so
+// more than one open session on disk is corruption a hand edit or a bad
+// write could produce.
+function openSession(id, client, startMs, lastSeenMs) {
+    return {
+        id, client, dayKey: '2026-09-11', startMs, endMs: null, lastSeenMs,
+        billedHours: null, description: '', interrupted: false,
+        cleanStop: false, exportedAt: null,
+    };
+}
+
+test('ClockStore: recover closes every stale session, resuming only the freshest', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2026, 9, 11, 9, 0);
+    let a = openSession('a', 'A', t - 5000, t);
+    let b = openSession('b', 'B', t, t + 1000);
+    let c = openSession('c', 'C', t + 500, t + 2000);
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: [a, b, c] })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    let interrupted = clock.recover(c.lastSeenMs + 60000); // under RESUME_GAP_MS for c
+    assertEqual(interrupted.id, 'b', 'the most recently interrupted of the stale ones');
+    let day = clock.sessionsForDay('2026-09-11');
+    let reloadedA = day.find(s => s.id === 'a');
+    let reloadedB = day.find(s => s.id === 'b');
+    assertEqual(reloadedA.endMs, a.lastSeenMs, 'closed at its own heartbeat');
+    assertEqual(reloadedA.interrupted, true);
+    assertEqual(reloadedB.endMs, b.lastSeenMs);
+    assertEqual(reloadedB.interrupted, true);
+    assertEqual(clock.running.id, 'c', 'the freshest session resumes');
+    clock.destroy();
+});
+
+test('ClockStore: recover closes the freshest session too once its own gap is stale', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2026, 9, 11, 9, 0);
+    let a = openSession('a', 'A', t - 5000, t);
+    let b = openSession('b', 'B', t, t + 1000);
+    let c = openSession('c', 'C', t + 500, t + 2000);
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: [a, b, c] })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    let interrupted = clock.recover(c.lastSeenMs + 7200000); // well past RESUME_GAP_MS
+    assertEqual(interrupted.id, 'c', 'the freshest session is also closed and reported');
+    let day = clock.sessionsForDay('2026-09-11');
+    assertEqual(day.every(s => s.interrupted), true, 'every session was interrupted');
+    let reloadedC = day.find(s => s.id === 'c');
+    assertEqual(reloadedC.endMs, c.lastSeenMs);
+    assertEqual(clock.running, null);
+    clock.destroy();
+});

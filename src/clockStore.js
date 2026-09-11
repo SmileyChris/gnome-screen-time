@@ -16,32 +16,44 @@ function newId() {
     return GLib.uuid_string_random();
 }
 
-// Seconds a session contributes: the adjustment if one was made, otherwise
-// the time actually on the clock. `runningId` is the id `running` currently
-// returns; an open session that is not it is an anomaly (a hand edit, an
-// interrupted write, a stale record) rather than something the user can
-// still be billed for indefinitely, so it is clamped to its last known
-// heartbeat and logged rather than left to grow forever, silently.
-function sessionSeconds(session, nowMs, runningId) {
-    if (session.billedHours !== null && session.billedHours !== undefined)
-        return session.billedHours * 3600;
-    if (session.endMs !== null)
-        return (session.endMs - session.startMs) / 1000;
-    if (session.id === runningId)
-        return (nowMs - session.startMs) / 1000;
-    console.error(`[ScreenTime] clock: stray open session ${session.id} (${session.client}) ` +
-        `is not the running one; clamped to its last heartbeat`);
-    return (session.lastSeenMs - session.startMs) / 1000;
-}
-
 export class ClockStore {
     constructor(settings) {
         this._settings = settings;
         this._sessions = [];
         this._dirty = false;
         this.onChange = null;
+        // Session ids already reported by _sessionSeconds()'s anomaly log,
+        // for the lifetime of this store. billedSecondsForDay() is polled
+        // on a timer by later code, so an unthrottled console.error would
+        // spam the journal forever for one persistent stray session; the
+        // clamping itself is unaffected, only the logging is throttled.
+        // recover() is what actually heals this state at startup, so this
+        // only has to cover anomalies that arise mid-run.
+        this._reportedAnomalies = new Set();
         this._ensureDir();
         this._load();
+    }
+
+    // Seconds a session contributes: the adjustment if one was made,
+    // otherwise the time actually on the clock. `runningId` is the id
+    // `running` currently returns; an open session that is not it is an
+    // anomaly (a hand edit, an interrupted write, a stale record) rather
+    // than something the user can still be billed for indefinitely, so it
+    // is clamped to its last known heartbeat and logged once rather than
+    // left to grow forever, silently.
+    _sessionSeconds(session, nowMs, runningId) {
+        if (session.billedHours !== null && session.billedHours !== undefined)
+            return session.billedHours * 3600;
+        if (session.endMs !== null)
+            return (session.endMs - session.startMs) / 1000;
+        if (session.id === runningId)
+            return (nowMs - session.startMs) / 1000;
+        if (!this._reportedAnomalies.has(session.id)) {
+            this._reportedAnomalies.add(session.id);
+            console.error(`[ScreenTime] clock: stray open session ${session.id} (${session.client}) ` +
+                `is not the running one; clamped to its last heartbeat`);
+        }
+        return (session.lastSeenMs - session.startMs) / 1000;
     }
 
     _ensureDir() {
@@ -140,6 +152,118 @@ export class ClockStore {
         return this.running ? this.stop(nowMs) : this.start(client, nowMs);
     }
 
+    // Marks dirty on every tick: _save() skips a clean store, so a heartbeat
+    // that only touched memory would leave a stale lastSeenMs on disk and
+    // recover() would bill the session short.
+    heartbeat(nowMs = Date.now()) {
+        let current = this.running;
+        if (!current)
+            return;
+        current.lastSeenMs = nowMs;
+        this._dirty = true;
+        this._save();
+    }
+
+    // Resolves sessions left open by a crash. On Wayland a Shell crash is a
+    // logout, so in practice the resume branch fires only for `make reload`
+    // and disable/enable cycles.
+    //
+    // Only one clock can run at a time, so more than one open session is
+    // corruption (a hand edit, an interrupted write, a bad update), not
+    // something that can legitimately keep accruing. The one with the
+    // freshest heartbeat is treated as the real one and gets the resume
+    // grace under RESUME_GAP_MS; every other open session is closed
+    // unconditionally at its own lastSeenMs, whatever its age.
+    recover(nowMs = Date.now()) {
+        let open = this._sessions.filter(s => s.endMs === null);
+        if (open.length === 0)
+            return null;
+
+        open.sort((a, b) => a.lastSeenMs - b.lastSeenMs);
+        let mostRecent = open.pop();
+
+        let interrupted = [];
+        for (let session of open) {
+            this._close(session, session.lastSeenMs);
+            session.interrupted = true;
+            interrupted.push(session);
+        }
+
+        let resumed = nowMs - mostRecent.lastSeenMs < RESUME_GAP_MS;
+        if (!resumed) {
+            this._close(mostRecent, mostRecent.lastSeenMs);
+            mostRecent.interrupted = true;
+            interrupted.push(mostRecent);
+        }
+
+        if (interrupted.length === 0)
+            return null;
+        this._changed();
+        // interrupted is in ascending lastSeenMs order, so the last entry
+        // is the most recently interrupted session.
+        return interrupted[interrupted.length - 1];
+    }
+
+    closeForShutdown(nowMs = Date.now()) {
+        let current = this.running;
+        if (!current)
+            return null;
+        this._close(current, nowMs);
+        current.cleanStop = true;
+        this._changed();
+        return current;
+    }
+
+    update(id, fields) {
+        let session = this._sessions.find(s => s.id === id);
+        if (!session)
+            return null;
+
+        let next = { ...session, ...fields };
+        if (next.endMs !== null && next.endMs < next.startMs)
+            throw new Error('backwards');
+        if (this._overlaps(next))
+            throw new Error('overlap');
+
+        Object.assign(session, fields);
+        // Moving a start across the boundary re-files the session, which is
+        // the one case where dayKey legitimately changes.
+        if (fields.startMs !== undefined) {
+            session.dayKey = dateKey(
+                GLib.DateTime.new_from_unix_local(session.startMs / 1000),
+                this._dayStartHour());
+        }
+        this._changed();
+        return session;
+    }
+
+    // End-to-start contact is not an overlap: switching produces exactly that.
+    _overlaps(candidate, nowMs = Date.now()) {
+        let aStart = candidate.startMs;
+        let aEnd = candidate.endMs ?? nowMs;
+        return this._sessions.some(other => {
+            if (other.id === candidate.id)
+                return false;
+            let bEnd = other.endMs ?? nowMs;
+            return aStart < bEnd && other.startMs < aEnd;
+        });
+    }
+
+    remove(id) {
+        let i = this._sessions.findIndex(s => s.id === id);
+        if (i < 0)
+            return false;
+        this._sessions.splice(i, 1);
+        this._changed();
+        return true;
+    }
+
+    sessionsInRange(fromMs, toMs, nowMs = Date.now()) {
+        return this._sessions
+            .filter(s => s.startMs < toMs && (s.endMs ?? nowMs) > fromMs)
+            .sort((a, b) => a.startMs - b.startMs);
+    }
+
     _close(session, endMs) {
         session.endMs = endMs;
         session.lastSeenMs = endMs;
@@ -154,10 +278,19 @@ export class ClockStore {
     billedSecondsForDay(dayKey, nowMs = Date.now()) {
         let runningId = this.running?.id ?? null;
         return this.sessionsForDay(dayKey)
-            .reduce((sum, s) => sum + sessionSeconds(s, nowMs, runningId), 0);
+            .reduce((sum, s) => sum + this._sessionSeconds(s, nowMs, runningId), 0);
     }
 
-    destroy() {
+    // Drops the store without closing the running session, which is what a
+    // crash looks like on disk. destroy() is the clean path.
+    destroySilently() {
+        this._save();
+        this._settings = null;
+        this.onChange = null;
+    }
+
+    destroy(nowMs = Date.now()) {
+        this.closeForShutdown(nowMs);
         this._save();
         this._settings = null;
         this.onChange = null;
