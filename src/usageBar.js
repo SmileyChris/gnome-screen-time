@@ -2,7 +2,9 @@ import St from 'gi://St';
 
 // Shared popup metrics. popupWidget.js and appTimerSection.js stack rows in the
 // same menu, so their widths and neutral tones have to stay in lockstep.
-export const ROW_W = 230;
+// Wide enough for the total card to carry the clock beside the screen time
+// without either half truncating. Shared by the bars, the rows and the card.
+export const ROW_W = 290;
 export const BAR_W = ROW_W - 16;
 // Neutral gray reads correctly on both light and dark Shell themes.
 export const TRACK_BG = 'rgba(128,128,128,0.18)';

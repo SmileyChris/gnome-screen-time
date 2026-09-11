@@ -1,0 +1,47 @@
+// Pure timing rule for the idle nudge, kept out of extension.js so it can be
+// unit tested without the Shell. Never import Shell/St/Clutter/Main here.
+
+// Once nudged, wait this long before nudging again for the same idle spell -
+// the notification is updated in place rather than stacked, so this is what
+// keeps it from re-popping every 30-second heartbeat tick.
+export const NUDGE_REPEAT_MS = 3600 * 1000;
+
+// True once `awaySinceMs` (0 means not away) has lasted at least
+// `thresholdMinutes`, and either no nudge has fired yet for this spell
+// (`lastNudgeMs` 0) or the last one was over an hour ago. A threshold of 0
+// disables the nudge entirely.
+export function nudgeDue(awaySinceMs, lastNudgeMs, nowMs, thresholdMinutes) {
+    if (thresholdMinutes <= 0 || !awaySinceMs)
+        return false;
+    if (nowMs - awaySinceMs < thresholdMinutes * 60 * 1000)
+        return false;
+    if (lastNudgeMs > 0 && nowMs - lastNudgeMs < NUDGE_REPEAT_MS)
+        return false;
+    return true;
+}
+
+// The instant the user actually went away across a disable()/enable() cycle
+// that resumed a held session (a lock, an idle blank, or a suspend that
+// disabled the extension - see extension.js's module-scoped
+// heldSessionId/heldAwaySince). `heldAwaySinceMs` is the tracker's own
+// away-since instant as it stood at disable() (0 if the tracker had not yet
+// noticed anything away by then - `_onPrepareForSleep(true)` and a lock
+// both usually beat the tracker to it, but not always); `lastSeenMs` is the
+// resumed session's own last heartbeat before recover() refreshed it, which
+// is at most 30s after the extension was actually still active. The
+// earlier of the two is what "away" actually means here: if the tracker
+// already knew, trust it over the coarser 30s heartbeat window; otherwise
+// fall back to the heartbeat.
+export function awayMomentMs(heldAwaySinceMs, lastSeenMs) {
+    return Math.min(heldAwaySinceMs || lastSeenMs, lastSeenMs);
+}
+
+// True when the gap between `awaySinceMs` and `nowMs` clears
+// `thresholdMinutes` - the away-on-unlock nudge's one-shot version of
+// nudgeDue() above (no repeat window: enable() calls this at most once per
+// resume). A threshold of 0 disables it, matching nudgeDue().
+export function awayNudgeDue(awaySinceMs, nowMs, thresholdMinutes) {
+    if (thresholdMinutes <= 0)
+        return false;
+    return nowMs - awaySinceMs >= thresholdMinutes * 60 * 1000;
+}

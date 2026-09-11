@@ -47,5 +47,47 @@
       <summary>Per-app daily time limits</summary>
       <description>Maps an application id to a daily limit in minutes. When today's tracked time for that app reaches its limit, a one-time notification is shown for the rest of the day.</description>
     </key>
+    <key name="interval-retention-days" type="i">
+      <default>30</default>
+      <range min="0" max="365"/>
+      <summary>Evidence retention days</summary>
+      <description>How long the per-day activity timeline behind each clock session is kept. Sessions themselves are never deleted; past this many days a session keeps its hours but loses its breakdown. 0 keeps the timeline forever.</description>
+    </key>
+    <key name="clients" type="a(sbb)">
+      <default>[]</default>
+      <summary>Clients available to the clock</summary>
+      <description>One entry per client: name, whether it is offered in the popup, and whether its time is billable. Non-billable clients are tracked and shown but left out of exports.</description>
+    </key>
+    <key name="last-client" type="s">
+      <default>""</default>
+      <summary>Most recently clocked client</summary>
+      <description>Internal, not user-facing. What the popup's clock control and the keyboard shortcut start when no client is named.</description>
+    </key>
+    <key name="toggle-clock" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Toggle the clock</summary>
+      <description>Keyboard shortcut that stops the running clock, or starts the most recently used client. Unset by default, because many combinations are already claimed by the desktop.</description>
+    </key>
+    <key name="panel-time" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="client"/>
+        <choice value="screen"/>
+      </choices>
+      <default>"screen"</default>
+      <summary>What the panel shows next to the icon</summary>
+      <description>"screen" shows today's total screen time, "client" shows the running clock (or today's billed total when the clock is stopped), "none" shows only the icon. A dot marks a running clock in every mode.</description>
+    </key>
+    <key name="panel-time-migrated" type="b">
+      <default>false</default>
+      <summary>Panel setting migration marker</summary>
+      <description>Internal, not user-facing. Set once panel-time has taken its value from the older show-total-in-panel boolean.</description>
+    </key>
+    <key name="clock-nudge-minutes" type="i">
+      <default>30</default>
+      <range min="0" max="480"/>
+      <summary>Nudge after this long idle while clocked in</summary>
+      <description>The clock keeps running while you are away, so a notification offers to stop it after this many minutes without input. 0 disables the nudge.</description>
+    </key>
   </schema>
 </schemalist>

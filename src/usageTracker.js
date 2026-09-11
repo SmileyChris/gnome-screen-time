@@ -25,6 +25,9 @@ export class UsageTracker {
         this._sources = sources;
         this._lastTime = Date.now();
 
+        this.onInterval = null;
+        this.onAway = null;
+
         // Where time is being credited right now: [appId], [appId, activityId]
         // or [appId, activityId, detailId], with matching display names. Null
         // while nothing is focused or the user is away.
@@ -85,6 +88,13 @@ export class UsageTracker {
         this._armIdleWatch();
         this._idleSettingId = this._settings.connect(
             'changed::idle-timeout', () => this._armIdleWatch());
+    }
+
+    // Presence, for anything that must show "away but still on the clock".
+    // Not derivable from the interval stream: _flush credits nothing while
+    // away, so no interval is emitted for the gap.
+    get away() {
+        return this._away;
     }
 
     // (Re)installs the idle watch for the configured timeout. A timeout of 0
@@ -237,8 +247,15 @@ export class UsageTracker {
             return;
         }
         let credited = Math.round(secs);
-        if (credited > 0)
+        if (credited > 0) {
             this._store.addTime(this._path, this._names, credited);
+            // Chained from _lastTime rather than to `now`: the line below
+            // advances the clock by exactly `credited` seconds in the
+            // uncapped case, so consecutive intervals meet to the
+            // millisecond instead of overlapping by the rounding residual.
+            this.onInterval?.(this._lastTime, this._lastTime + credited * 1000,
+                this._path, this._names);
+        }
         // When max-interval capped the stretch, the excess is discarded on
         // purpose (that is what the setting is for), so no residual.
         this._lastTime = secs < elapsed ? now : now - (secs - credited) * 1000;
@@ -304,6 +321,7 @@ export class UsageTracker {
         // already null, so it only resets the clock for the app picked up next.
         this._flush(now);
         this._setCurrent(away ? null : this._currentApp());
+        this.onAway?.(away);
     }
 
     _onPresenceChanged() {
