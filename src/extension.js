@@ -42,191 +42,212 @@ let heldSessionId = null;
 let heldAwaySince = 0;
 
 export default class ScreenTimeExtension extends Extension {
+    // GNOME Shell never calls disable() after a throwing enable() (verified
+    // against ui/extensionSystem.js's _callExtensionEnable: its catch block
+    // only unloads the stylesheet and logs the error, leaving the
+    // extension in the ERROR state - disable() is simply never reached),
+    // and with C1, enable() now runs on every unlock, not just once at
+    // login. A throw partway through after that would leak everything
+    // registered before it - notably ClockDBus's D-Bus object export,
+    // which makes every later enable() fail with "already exported" until
+    // the Shell itself restarts, locking the clock out for the rest of the
+    // session. Wrapping the whole body and calling this.disable() ourselves
+    // before rethrowing cleans up exactly what got set up; disable() is
+    // written to be safe to call on a partially built extension (every
+    // field access null-guarded, every timeout/signal id checked before
+    // removal) specifically so this is safe at any point the throw occurs.
     enable() {
-        this._settings = this.getSettings();
+        try {
+            this._settings = this.getSettings();
 
-        this._store = new UsageStore(this._settings);
-        this._clock = new ClockStore(this._settings);
-        // Built before recover() runs, so a session left open by a crash
-        // can actually be reported - nobody opens the Timesheet unprompted,
-        // so "surfaced for review" would otherwise never be seen.
-        this._notifier = new ClockNotifier(this._clock);
+            this._store = new UsageStore(this._settings);
+            this._clock = new ClockStore(this._settings);
+            // Built before recover() runs, so a session left open by a crash
+            // can actually be reported - nobody opens the Timesheet unprompted,
+            // so "surfaced for review" would otherwise never be seen.
+            this._notifier = new ClockNotifier(this._clock);
 
-        // Read and cleared immediately, before recover() below mutates
-        // anything: a throw partway through enable() (see the try/catch it
-        // runs in) must never leave stale module state for a later
-        // enable() to misread - the next disable() sets these fresh from
-        // whatever is running by then regardless.
-        let resumeId = heldSessionId;
-        let awaySince = heldAwaySince;
-        heldSessionId = null;
-        heldAwaySince = 0;
-        // Read before recover() runs: recover() refreshes the resumed
-        // session's own lastSeenMs to `nowMs`, so this is the last chance
-        // to see what it was before that - the away-on-unlock nudge below
-        // needs that original value, not the just-refreshed one.
-        let heldLastSeenMs = resumeId ? this._clock.sessionById(resumeId)?.lastSeenMs ?? null : null;
-
-        let nowMs = Date.now();
-        let interrupted = this._clock.recover(nowMs, { resumeId });
-        if (interrupted)
-            this._notifier.notifyInterrupted(interrupted);
-
-        // Surfaces whatever a lock/idle-blank/suspend cost while this
-        // extension itself was disabled and could run no timer, no idle
-        // watch, nothing - the reachability the idle and suspend nudges
-        // lose in exactly that window. Only when a held session was
-        // actually resumed: recover() above always resumes it when
-        // resumeId names a session that was still open.
-        if (resumeId && heldLastSeenMs !== null) {
-            let resumed = this._clock.sessionById(resumeId);
-            if (resumed && resumed.endMs === null) {
-                let awayMoment = awayMomentMs(awaySince, heldLastSeenMs);
-                let minutes = this._settings.get_int('clock-nudge-minutes');
-                if (awayNudgeDue(awayMoment, nowMs, minutes))
-                    this._notifier.notifyAway(resumed, awayMoment, nowMs);
-            }
-        }
-
-        this._indicator = new PanelIndicator();
-        this._indicator.addToPanel(this.uuid);
-        this._popup = new PopupWidget(this._indicator.menu, this._store,
-            this._settings, () => this._openPrefs(), this._clock,
-            () => this._openTimesheet());
-
-        // The browser companion pushes into this source over D-Bus; the same
-        // instance sits in the registry the tracker reads from.
-        let browserSource = new BrowserSource();
-        this._dbus = new DbusService(browserSource);
-        this._tracker = new UsageTracker(this._store, this._settings,
-            new ActivitySourceRegistry([new ZellijSource(), browserSource]));
-        this._intervals = new IntervalLog(this._settings);
-        this._intervals.purge();
-        this._tracker.onInterval = (s, e, path, names) => {
-            this._intervals.record(s, e, path, names);
-            this._intervals.flush();
-        };
-        this._limitNotifier = new LimitNotifier(this._settings);
-
-        this._store.onChange = (appId, displayName, seconds) => {
-            this._indicator.setTotal(this._store.getTodayTotal());
-            if (appId)
-                this._limitNotifier.checkLimit(appId, displayName, seconds);
-        };
-        this._indicator.setTotal(this._store.getTodayTotal());
-
-        this._heartbeatId = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT, 30,
-            () => {
-                this._clock.heartbeat();
-                this._syncPanelClock();
-                this._checkNudge();
-                return GLib.SOURCE_CONTINUE;
-            });
-
-        migratePanelSetting(this._settings);
-        this._settings.connectObject(
-            'changed::panel-time', () => this._syncPanelLabel(), this);
-        this._syncPanelLabel();
-
-        // Must be set before ClockDBus is constructed below - see the
-        // comment there.
-        this._clock.onChange = () => this._syncPanelClock();
-        // 0 while not away; the instant UsageTracker first reported away,
-        // otherwise. `_onPrepareForSleep(true)` calls `_setAway(true)` even
-        // when the lock screen already made the tracker away, so onAway(true)
-        // can arrive twice in a row with no `false` between - only setting
-        // this when it is still 0 keeps a second such call from restarting
-        // the timer and pushing the nudge out by a whole threshold.
-        this._awaySince = 0;
-        this._nudgedAt = 0;
-        this._tracker.onAway = away => {
-            this._syncPanelClock();
-            if (away) {
-                if (this._awaySince === 0)
-                    this._awaySince = Date.now();
-            } else if (this._awaySince > 0) {
-                this._awaySince = 0;
-                this._nudgedAt = 0;
-            }
-        };
-        this._syncPanelClock();
-
-        // ClockDBus wraps clock.onChange, chaining through whatever handler
-        // is already there. Any code that wants to set clock.onChange
-        // itself must do so BEFORE this line: an assignment after this
-        // point silently replaces ClockDBus's wrapper, and ClockChanged
-        // stops firing over D-Bus with no error anywhere.
-        this._clockDbus = new ClockDBus(this._clock, this._intervals, this._settings);
-
-        // A second, independent prepare-for-sleep listener alongside
-        // UsageTracker's own (src/usageTracker.js:_onPrepareForSleep):
-        // reaching into the tracker's connection would couple this to its
-        // internals, so this mirrors its exact connect/disconnect pattern
-        // instead - plain connect()/disconnect(), not connectObject(), since
-        // nothing here guarantees LoginManager's object supports that.
-        this._loginManager = LoginManager.getLoginManager();
-        this._sleptAt = 0;
-        this._sleepId = this._loginManager.connect(
-            'prepare-for-sleep', (lm, aboutToSuspend) => {
-                if (aboutToSuspend) {
-                    this._sleptAt = Date.now();
-                    return;
-                }
-                // A `false` with no preceding `true` (a listener installed
-                // mid-suspend somehow) must not be treated as a real sleep.
-                if (this._sleptAt === 0)
-                    return;
-                let wokeAt = Date.now();
-                let sleptAt = this._sleptAt;
-                this._sleptAt = 0;
-                let session = this._clock.running;
-                let slept = (wokeAt - sleptAt) / 1000;
-                let minutes = this._settings.get_int('clock-nudge-minutes');
-                if (session && minutes > 0 && slept >= minutes * 60)
-                    this._notifier?.notifyResume(session, Math.round(slept), sleptAt, wokeAt);
-            });
-
-        // A real logout or full shutdown/reboot does NOT call disable() -
-        // only a session-mode change does (a lock, an idle blank, a suspend
-        // that locks), and none of those are a genuine end. `global`
-        // (Shell.Global) emits 'shutdown' at a real session end: verified
-        // against GNOME Shell 50's extracted ui/main.js, which connects to
-        // it twice at Shell startup (line ~242, tearing down the input
-        // method; line ~266, which blocks the whole shutdown in a nested
-        // GLib.MainLoop until an async task - flushing the time-limits
-        // history - finishes). That second handler is proof a 'shutdown'
-        // listener can reliably still run code before the process actually
-        // exits; this one is synchronous (closeForShutdown() just writes
-        // clock.json), so no such loop is needed here. ui/sessionMode.js
-        // defines only 'restrictive', 'gdm', 'unlock-dialog' and 'user' as
-        // session modes, and ui/endSessionDialog.js (the logout/shutdown
-        // confirmation dialog) never pushes one, so this extension stays
-        // enabled - and this handler stays connected - through the whole
-        // confirmation. This is the one chance to close the session cleanly
-        // before recover()'s fallback has to: the next login's recover()
-        // still closes it at its last heartbeat (at most 30s late) and
-        // marks it interrupted if this somehow doesn't fire in time.
-        this._shutdownId = global.connect('shutdown', () => {
-            this._clock?.closeForShutdown();
+            // Read and cleared immediately, before recover() below mutates
+            // anything: a throw partway through enable() (see the try/catch
+            // this whole body runs in) must never leave stale module state
+            // for a later enable() to misread - the next disable() sets
+            // these fresh from whatever is running by then regardless.
+            let resumeId = heldSessionId;
+            let awaySince = heldAwaySince;
             heldSessionId = null;
-        });
+            heldAwaySince = 0;
+            // Read before recover() runs: recover() refreshes the resumed
+            // session's own lastSeenMs to `nowMs`, so this is the last chance
+            // to see what it was before that - the away-on-unlock nudge below
+            // needs that original value, not the just-refreshed one.
+            let heldLastSeenMs = resumeId ? this._clock.sessionById(resumeId)?.lastSeenMs ?? null : null;
 
-        // Registered last: if anything above throws, enable() aborts and the
-        // extension is left in the ERROR state without disable() ever
-        // running, so a grab taken earlier would stay registered - global
-        // and un-removable - until the Shell itself restarts. Registering
-        // only once everything else has succeeded means a failed enable()
-        // never leaves a dangling keybinding behind.
-        //
-        // IGNORE_AUTOREPEAT so holding the keys cannot start and stop
-        // repeatedly; NORMAL | OVERVIEW so it works on the desktop and with
-        // Activities open.
-        Main.wm.addKeybinding(
-            'toggle-clock', this._settings,
-            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
-            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            () => this._toggleClock());
+            let nowMs = Date.now();
+            let interrupted = this._clock.recover(nowMs, { resumeId });
+            if (interrupted)
+                this._notifier.notifyInterrupted(interrupted);
+
+            // Surfaces whatever a lock/idle-blank/suspend cost while this
+            // extension itself was disabled and could run no timer, no idle
+            // watch, nothing - the reachability the idle and suspend nudges
+            // lose in exactly that window. Only when a held session was
+            // actually resumed: recover() above always resumes it when
+            // resumeId names a session that was still open.
+            if (resumeId && heldLastSeenMs !== null) {
+                let resumed = this._clock.sessionById(resumeId);
+                if (resumed && resumed.endMs === null) {
+                    let awayMoment = awayMomentMs(awaySince, heldLastSeenMs);
+                    let minutes = this._settings.get_int('clock-nudge-minutes');
+                    if (awayNudgeDue(awayMoment, nowMs, minutes))
+                        this._notifier.notifyAway(resumed, awayMoment, nowMs);
+                }
+            }
+
+            this._indicator = new PanelIndicator();
+            this._indicator.addToPanel(this.uuid);
+            this._popup = new PopupWidget(this._indicator.menu, this._store,
+                this._settings, () => this._openPrefs(), this._clock,
+                () => this._openTimesheet());
+
+            // The browser companion pushes into this source over D-Bus; the same
+            // instance sits in the registry the tracker reads from.
+            let browserSource = new BrowserSource();
+            this._dbus = new DbusService(browserSource);
+            this._tracker = new UsageTracker(this._store, this._settings,
+                new ActivitySourceRegistry([new ZellijSource(), browserSource]));
+            this._intervals = new IntervalLog(this._settings);
+            this._intervals.purge();
+            this._tracker.onInterval = (s, e, path, names) => {
+                this._intervals.record(s, e, path, names);
+                this._intervals.flush();
+            };
+            this._limitNotifier = new LimitNotifier(this._settings);
+
+            this._store.onChange = (appId, displayName, seconds) => {
+                this._indicator.setTotal(this._store.getTodayTotal());
+                if (appId)
+                    this._limitNotifier.checkLimit(appId, displayName, seconds);
+            };
+            this._indicator.setTotal(this._store.getTodayTotal());
+
+            this._heartbeatId = GLib.timeout_add_seconds(
+                GLib.PRIORITY_DEFAULT, 30,
+                () => {
+                    this._clock.heartbeat();
+                    this._syncPanelClock();
+                    this._checkNudge();
+                    return GLib.SOURCE_CONTINUE;
+                });
+
+            migratePanelSetting(this._settings);
+            this._settings.connectObject(
+                'changed::panel-time', () => this._syncPanelLabel(), this);
+            this._syncPanelLabel();
+
+            // Must be set before ClockDBus is constructed below - see the
+            // comment there.
+            this._clock.onChange = () => this._syncPanelClock();
+            // 0 while not away; the instant UsageTracker first reported away,
+            // otherwise. `_onPrepareForSleep(true)` calls `_setAway(true)` even
+            // when the lock screen already made the tracker away, so onAway(true)
+            // can arrive twice in a row with no `false` between - only setting
+            // this when it is still 0 keeps a second such call from restarting
+            // the timer and pushing the nudge out by a whole threshold.
+            this._awaySince = 0;
+            this._nudgedAt = 0;
+            this._tracker.onAway = away => {
+                this._syncPanelClock();
+                if (away) {
+                    if (this._awaySince === 0)
+                        this._awaySince = Date.now();
+                } else if (this._awaySince > 0) {
+                    this._awaySince = 0;
+                    this._nudgedAt = 0;
+                }
+            };
+            this._syncPanelClock();
+
+            // ClockDBus wraps clock.onChange, chaining through whatever handler
+            // is already there. Any code that wants to set clock.onChange
+            // itself must do so BEFORE this line: an assignment after this
+            // point silently replaces ClockDBus's wrapper, and ClockChanged
+            // stops firing over D-Bus with no error anywhere.
+            this._clockDbus = new ClockDBus(this._clock, this._intervals, this._settings);
+
+            // A second, independent prepare-for-sleep listener alongside
+            // UsageTracker's own (src/usageTracker.js:_onPrepareForSleep):
+            // reaching into the tracker's connection would couple this to its
+            // internals, so this mirrors its exact connect/disconnect pattern
+            // instead - plain connect()/disconnect(), not connectObject(), since
+            // nothing here guarantees LoginManager's object supports that.
+            this._loginManager = LoginManager.getLoginManager();
+            this._sleptAt = 0;
+            this._sleepId = this._loginManager.connect(
+                'prepare-for-sleep', (lm, aboutToSuspend) => {
+                    if (aboutToSuspend) {
+                        this._sleptAt = Date.now();
+                        return;
+                    }
+                    // A `false` with no preceding `true` (a listener installed
+                    // mid-suspend somehow) must not be treated as a real sleep.
+                    if (this._sleptAt === 0)
+                        return;
+                    let wokeAt = Date.now();
+                    let sleptAt = this._sleptAt;
+                    this._sleptAt = 0;
+                    let session = this._clock.running;
+                    let slept = (wokeAt - sleptAt) / 1000;
+                    let minutes = this._settings.get_int('clock-nudge-minutes');
+                    if (session && minutes > 0 && slept >= minutes * 60)
+                        this._notifier?.notifyResume(session, Math.round(slept), sleptAt, wokeAt);
+                });
+
+            // A real logout or full shutdown/reboot does NOT call disable() -
+            // only a session-mode change does (a lock, an idle blank, a suspend
+            // that locks), and none of those are a genuine end. `global`
+            // (Shell.Global) emits 'shutdown' at a real session end: verified
+            // against GNOME Shell 50's extracted ui/main.js, which connects to
+            // it twice at Shell startup (line ~242, tearing down the input
+            // method; line ~266, which blocks the whole shutdown in a nested
+            // GLib.MainLoop until an async task - flushing the time-limits
+            // history - finishes). That second handler is proof a 'shutdown'
+            // listener can reliably still run code before the process actually
+            // exits; this one is synchronous (closeForShutdown() just writes
+            // clock.json), so no such loop is needed here. ui/sessionMode.js
+            // defines only 'restrictive', 'gdm', 'unlock-dialog' and 'user' as
+            // session modes, and ui/endSessionDialog.js (the logout/shutdown
+            // confirmation dialog) never pushes one, so this extension stays
+            // enabled - and this handler stays connected - through the whole
+            // confirmation. This is the one chance to close the session cleanly
+            // before recover()'s fallback has to: the next login's recover()
+            // still closes it at its last heartbeat (at most 30s late) and
+            // marks it interrupted if this somehow doesn't fire in time.
+            this._shutdownId = global.connect('shutdown', () => {
+                this._clock?.closeForShutdown();
+                heldSessionId = null;
+            });
+
+            // Registered last: if anything above throws, the catch below
+            // calls disable() and rethrows, so a grab taken earlier would
+            // otherwise stay registered - global and un-removable - until
+            // the Shell itself restarts. Registering only once everything
+            // else has succeeded means a failed enable() never leaves a
+            // dangling keybinding for disable() to clean up in the first
+            // place, though it would be harmless either way (see
+            // disable()'s call to Main.wm.removeKeybinding()).
+            //
+            // IGNORE_AUTOREPEAT so holding the keys cannot start and stop
+            // repeatedly; NORMAL | OVERVIEW so it works on the desktop and with
+            // Activities open.
+            Main.wm.addKeybinding(
+                'toggle-clock', this._settings,
+                Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+                Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+                () => this._toggleClock());
+        } catch (e) {
+            this.disable();
+            throw e;
+        }
     }
 
     // /usr/bin/gjs rather than bare `gjs`: a systemd user session's PATH is
@@ -302,8 +323,13 @@ export default class ScreenTimeExtension extends Extension {
             this._tracker?.away ?? false));
     }
 
+    // Must be safe to call at any point enable() might have thrown (see the
+    // try/catch there) - on a fully built extension, a completely untouched
+    // one (getSettings() itself threw), or anything in between. Every field
+    // is therefore accessed through `?.` or an `if` guard, and every
+    // timeout/signal id is checked before removal.
     disable() {
-        this._settings.disconnectObject(this);
+        this._settings?.disconnectObject(this);
         if (this._heartbeatId) {
             GLib.source_remove(this._heartbeatId);
             this._heartbeatId = null;
@@ -312,7 +338,7 @@ export default class ScreenTimeExtension extends Extension {
         // this._notifier) is torn down below, so a suspend signal arriving
         // mid-teardown can never fire into a half-destroyed extension.
         if (this._sleepId) {
-            this._loginManager.disconnect(this._sleepId);
+            this._loginManager?.disconnect(this._sleepId);
             this._sleepId = null;
         }
         this._loginManager = null;
@@ -355,6 +381,10 @@ export default class ScreenTimeExtension extends Extension {
         this._limitNotifier = null;
         this._intervals?.destroy();
         this._intervals = null;
+        // Safe even when enable() never reached addKeybinding(): Shell 50's
+        // WindowManager.removeKeybinding() (ui/windowManager.js) just checks
+        // global.display.remove_keybinding()'s boolean return and skips
+        // silently when there was nothing to remove - it never throws.
         Main.wm.removeKeybinding('toggle-clock');
         // release(), not destroy(): the clock keeps running through a lock,
         // an idle blank and a suspend (all of which disable this extension
