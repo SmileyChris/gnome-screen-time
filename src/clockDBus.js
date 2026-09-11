@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import { evidenceFor } from './evidence.js';
 import { readClients } from './clients.js';
 import { mergeSessions, selectExportable, countSkippedUnknown, toJSON, toCSV } from './timeExport.js';
@@ -7,6 +8,16 @@ const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime/Clock';
 
 // ExportPeriod's day keys arrive as plain strings from another process.
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// GetEvidence's session can have any span at all - a hand-edited or
+// mis-typed startMs (the year 2000 is a valid timestamp - see
+// clockStore.js's MIN_TIMESTAMP_MS) against an endMs near now walks
+// IntervalLog.query()'s day-by-day loop across every day in between: a
+// session moved back to 2000 walks roughly 36,500 day keys, a measured
+// ~0.5s stall in the compositor's own thread for one D-Bus call. Refused
+// well before that gets anywhere close.
+const MAX_EVIDENCE_SPAN_DAYS = 400;
+const MAX_EVIDENCE_SPAN_MS = MAX_EVIDENCE_SPAN_DAYS * 24 * 3600 * 1000;
 
 // Payloads cross as JSON rather than as nested variants: the shapes here grow
 // with the feature, and a hand-maintained D-Bus signature on both sides of a
@@ -97,6 +108,12 @@ export class ClockDBus {
         let session = this._clock.sessionById(sessionId);
         if (!session)
             return JSON.stringify({ error: 'missing' });
+        // See MAX_EVIDENCE_SPAN_MS above: refused before it ever reaches
+        // IntervalLog.query(), which is what actually walks a day per key
+        // in range.
+        let span = (session.endMs ?? Date.now()) - session.startMs;
+        if (span > MAX_EVIDENCE_SPAN_MS)
+            return JSON.stringify({ error: 'span' });
         // Buffered intervals have not reached disk, and query() reads
         // files, so flush the tail first. The window must never see less
         // evidence than the Shell already holds.
@@ -168,6 +185,13 @@ export class ClockDBus {
         try {
             if (!DAY_KEY_RE.test(fromDayKey) || !DAY_KEY_RE.test(toDayKeyExclusive) ||
                 !(fromDayKey < toDayKeyExclusive))
+                return JSON.stringify({ error: 'invalid' });
+            // The Timesheet always builds an absolute path from Gtk.FileDialog,
+            // but nothing stops a hand-crafted call from sending a relative
+            // one, which Gio.File.new_for_path() would resolve against this
+            // process's own cwd (the Shell's, not the caller's) - writing
+            // somewhere the caller never chose and never saw.
+            if (!GLib.path_is_absolute(path))
                 return JSON.stringify({ error: 'invalid' });
 
             let sessions = this._clock.sessionsForDays(fromDayKey, toDayKeyExclusive);

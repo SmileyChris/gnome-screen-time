@@ -908,6 +908,93 @@ test('ClockStore: update rejects a non-string description', () => {
     clock.destroy();
 });
 
+// --- M6: D-Bus hardening - length/magnitude caps on untrusted UpdateSession
+// and StartSession payloads ---
+
+test('ClockStore: update accepts a description right at the 1000-character cap', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let text = 'x'.repeat(1000);
+    let updated = clock.update(session.id, { description: text });
+    assertEqual(updated.description, text);
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a description over the 1000-character cap', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { description: 'x'.repeat(1001) });
+    clock.destroy();
+});
+
+test('ClockStore: update accepts a client right at the 200-character cap', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let second = clock.start('BETA', t + 3600000);
+    clock.stop(t + 7200000);
+    let name = 'x'.repeat(200);
+    let updated = clock.update(second.id, { client: name });
+    assertEqual(updated.client, name);
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a client over the 200-character cap', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { client: 'x'.repeat(201) });
+    clock.destroy();
+});
+
+test('ClockStore: start rejects a client over the 200-character cap', () => {
+    let clock = freshClock();
+    let threw = null;
+    try {
+        clock.start('x'.repeat(201), at(2026, 9, 11, 9, 0));
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running, null);
+    assertEqual(clock._sessions, []);
+    clock.destroy();
+});
+
+test('ClockStore: update accepts billedHours right at the 10000 cap', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let updated = clock.update(session.id, { billedHours: 10000 });
+    assertEqual(updated.billedHours, 10000);
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a billedHours over the 10000 cap', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { billedHours: 10001 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects an astronomically large billedHours that would overflow to Infinity in export', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { billedHours: 1e300 });
+    clock.destroy();
+});
+
 test('ClockStore: update rejects a non-numeric startMs', () => {
     let clock = freshClock();
     let t = at(2026, 9, 11, 9, 0);

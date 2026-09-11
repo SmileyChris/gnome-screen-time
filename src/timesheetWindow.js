@@ -459,7 +459,24 @@ export class TimesheetWindow {
             row.add_row(new Adw.ActionRow({ title: `Could not read evidence: ${e.message}` }));
             return;
         }
-        if (evidence.error) {
+        if (evidence.error === 'span') {
+            // Refused server-side (ClockDBus's MAX_EVIDENCE_SPAN_MS) rather
+            // than walking a day-by-day query across an implausible range -
+            // likely a start or end time far from reality (a bad manual
+            // edit, say). Still render the Started/Ended/Bill fields below
+            // with a synthetic, empty evidence shape, so the session stays
+            // fixable from here instead of becoming a dead end.
+            row.add_row(new Adw.ActionRow({
+                title: "Evidence isn't shown for this session",
+                subtitle: "Its span is too large to query safely - likely a start or end " +
+                    'time far from reality. Fix it below, then reopen this row.',
+            }));
+            evidence = {
+                entries: [], unattributedSeconds: 0, firstActivityMs: null,
+                spanSeconds: Math.max(0, Math.round(
+                    ((session.endMs ?? Date.now()) - session.startMs) / 1000)),
+            };
+        } else if (evidence.error) {
             row.add_row(new Adw.ActionRow({ title: 'This session is no longer available.' }));
             return;
         }

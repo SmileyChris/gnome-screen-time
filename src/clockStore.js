@@ -54,21 +54,42 @@ function isValidTimestamp(value) {
 // drifting apart. `default: true` covers keys neither caller ever passes
 // here (update()'s allowlist and _load()'s field list both call this only
 // with keys they know about).
+// D-Bus hardening: UpdateSession(id, fieldsJson) and StartSession(client)
+// take these straight from another process, with no shape or length limit
+// of their own - JSON carries none. `client` and `description` are free
+// text a caller could paste anything into; bounded here so a pathological
+// payload can't bloat clock.json or the Timesheet's UI without limit.
+const MAX_CLIENT_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 1000;
+// billedHours is bounded for a different reason than size: keeping
+// mergeSessions()'s arithmetic (timeExport.js: Math.round(billedHours *
+// 3600000)) finite. A single session billing more than this is certainly a
+// mistake - over a year of continuous, non-stop time - and a large enough
+// override overflows that multiplication to Infinity well before reaching
+// this bound; JSON.stringify(Infinity) silently becomes the literal `null`,
+// so an unbounded billedHours could previously export as "hours": null
+// instead of an obviously wrong number a human might actually notice.
+const MAX_BILLED_HOURS = 10000;
+
 function isValidField(key, value) {
     switch (key) {
     case 'id':
-    case 'client':
         return typeof value === 'string' && value.trim().length > 0;
+    case 'client':
+        return typeof value === 'string' && value.trim().length > 0 &&
+            value.length <= MAX_CLIENT_LENGTH;
     case 'dayKey':
-    case 'description':
         return typeof value === 'string';
+    case 'description':
+        return typeof value === 'string' && value.length <= MAX_DESCRIPTION_LENGTH;
     case 'startMs':
     case 'lastSeenMs':
         return isValidTimestamp(value);
     case 'endMs':
         return value === null || isValidTimestamp(value);
     case 'billedHours':
-        return value === null || (isFiniteNumber(value) && value >= 0);
+        return value === null ||
+            (isFiniteNumber(value) && value >= 0 && value <= MAX_BILLED_HOURS);
     case 'interrupted':
     case 'cleanStop':
         return typeof value === 'boolean';
