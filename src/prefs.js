@@ -7,12 +7,29 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
+import { readClients, writeClients } from './clients.js';
+import { ShortcutRow } from './shortcutRow.js';
+import { migratePanelSetting } from './panelMode.js';
 
 const HISTORY_DAYS = 7;
 const CHART_HEIGHT = 110;
 // Same accent blue the popup uses for the largest app, so the two views read
 // as one product.
 const BAR_RGB = [0x35 / 255, 0x84 / 255, 0xe4 / 255];
+
+// An Adw.ComboRow's default factory ellipsizes the selected item to fit
+// beside the row's title and subtitle. This one never ellipsizes, so the row
+// gives the choice its full width and wraps the subtitle instead.
+function unellipsizedFactory() {
+    const factory = new Gtk.SignalListItemFactory();
+    factory.connect('setup', (_factory, item) => {
+        item.child = new Gtk.Label({xalign: 0});
+    });
+    factory.connect('bind', (_factory, item) => {
+        item.child.label = item.item.string;
+    });
+    return factory;
+}
 
 // Sync read is fine here: prefs runs in its own process, not the compositor.
 function loadUsageData() {
@@ -117,6 +134,16 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         // collected Gio.Settings silently stops every binding on this page.
         const settings = this.getSettings();
         window._settings = settings;
+        // extension.js's enable() runs this too, but preferences is its own
+        // process and can be opened whether or not the extension is
+        // currently enabled - gnome-extensions prefs, or the gear icon
+        // before the Shell has ever loaded this version's enable() this
+        // session. Run here too, before the combo below reads panel-time,
+        // so a choice made here is never overwritten by a later enable()
+        // still migrating the old show-total-in-panel boolean for the
+        // first time (migratePanelSetting() is a one-time, idempotent
+        // no-op past its first successful run either way).
+        migratePanelSetting(settings);
         const data = loadUsageData();
 
         const page = new Adw.PreferencesPage();
@@ -125,13 +152,18 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         const panelGroup = new Adw.PreferencesGroup({title: 'Panel'});
         page.add(panelGroup);
 
-        const showTotalRow = new Adw.SwitchRow({
-            title: 'Show total time in panel',
-            subtitle: 'Off shows only the icon.',
+        const panelRow = new Adw.ComboRow({
+            title: 'Show in panel',
+            subtitle: 'The icon turns into a stopwatch while the clock runs, whichever you pick.',
+            model: Gtk.StringList.new(['Client or screen time', 'Client time', 'Screen time', 'Nothing']),
+            factory: unellipsizedFactory(),
         });
-        settings.bind('show-total-in-panel', showTotalRow, 'active',
-            Gio.SettingsBindFlags.DEFAULT);
-        panelGroup.add(showTotalRow);
+        const PANEL_MODES = ['client-or-screen', 'client', 'screen', 'none'];
+        panelRow.selected = Math.max(0, PANEL_MODES.indexOf(settings.get_string('panel-time')));
+        panelRow.connect('notify::selected', () => {
+            settings.set_string('panel-time', PANEL_MODES[panelRow.selected]);
+        });
+        panelGroup.add(panelRow);
 
         const intervalGroup = new Adw.PreferencesGroup({title: 'Tracking'});
         page.add(intervalGroup);
@@ -193,6 +225,8 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         this._addCompanionsGroup(page, window);
 
         this._addLimitsGroup(page, settings, data);
+
+        this._addClientsGroup(page, settings, window);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
         page.add(retentionGroup);
@@ -477,5 +511,165 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         addRow.add_suffix(minutesSpin);
         addRow.add_suffix(addButton);
         limitsGroup.add(addRow);
+    }
+
+    // The client list is the only place clients get created: the popup
+    // cannot take text input sanely. Active is the only way to retire a
+    // client short of deleting it outright: recentClients() (clients.js)
+    // excludes an inactive client from the popup's padding, but
+    // selectExportable() (timeExport.js) keeps it exportable regardless, so
+    // turning a client inactive - rather than deleting it - is how its
+    // history stays reachable from a later export.
+    _addClientsGroup(page, settings, window) {
+        const clientsGroup = new Adw.PreferencesGroup({
+            title: 'Clients',
+            description: 'Clients the clock tracks time for. Inactive ones stay out of the popup ' +
+                'but still export.',
+        });
+        page.add(clientsGroup);
+
+        const clientRows = [];
+        let addRow = null;
+
+        const renderClients = () => {
+            for (let row of clientRows.splice(0))
+                clientsGroup.remove(row);
+            let list = readClients(settings);
+            list.forEach((client, i) => {
+                let row = new Adw.ActionRow({ title: client.name });
+
+                let active = new Gtk.Switch({
+                    active: client.active, valign: Gtk.Align.CENTER,
+                    tooltip_text: 'Active (offered in the popup)',
+                });
+                active.connect('notify::active', () => {
+                    let next = readClients(settings);
+                    next[i].active = active.active;
+                    writeClients(settings, next);
+                });
+                row.add_suffix(active);
+
+                // Deleting is the only way to make a client's name stop
+                // resolving at all: selectExportable() and mergeSessions()
+                // (timeExport.js) key rows by client name, so a session
+                // already recorded against a deleted client can never be
+                // exported again unless the same name is added back -
+                // turning it inactive instead keeps that door open.
+                let remove = new Gtk.Button({
+                    icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER,
+                    css_classes: ['flat'],
+                });
+                remove.connect('clicked', () => {
+                    let dialog = new Adw.AlertDialog({
+                        heading: `Delete ${client.name}?`,
+                        body: `Sessions already recorded for ${client.name} will no longer be ` +
+                            'exported unless the client is added again, even though they stay ' +
+                            'in the Timesheet. Consider turning it inactive instead - it drops ' +
+                            'out of the popup but stays exportable.',
+                    });
+                    dialog.add_response('cancel', 'Cancel');
+                    dialog.add_response('delete', 'Delete');
+                    dialog.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE);
+                    dialog.set_default_response('cancel');
+                    dialog.set_close_response('cancel');
+                    dialog.connect('response', (_dialog, response) => {
+                        if (response !== 'delete')
+                            return;
+                        let next = readClients(settings);
+                        next.splice(i, 1);
+                        writeClients(settings, next);
+                        renderClients();
+                    });
+                    dialog.present(window);
+                });
+                row.add_suffix(remove);
+
+                clientsGroup.add(row);
+                clientRows.push(row);
+            });
+
+            addRow = new Adw.EntryRow({ title: 'Add a client' });
+            addRow.connect('entry-activated', () => {
+                let name = addRow.text.trim();
+                if (name.length === 0)
+                    return;
+                let next = readClients(settings);
+                if (next.some(c => c.name === name))
+                    return;
+                next.push({ name, active: true });
+                writeClients(settings, next);
+                addRow.text = '';
+                renderClients();
+                // renderClients() built a new field, so move focus to it
+                // and the next name can be typed straight away.
+                addRow.grab_focus();
+            });
+            clientsGroup.add(addRow);
+            clientRows.push(addRow);
+        };
+
+        renderClients();
+
+        // The popup's "Add client…" row sets prefs-focus to ask for this
+        // field (see clockSection.js), since the Shell can pass Preferences
+        // nothing else. The request is used up here, so a later open from
+        // the gear starts at the top as usual. It is also watched while the
+        // window is open, because the Shell then only raises the window.
+        const focusAddClient = () => {
+            if (settings.get_string('prefs-focus') !== 'add-client')
+                return;
+            settings.set_string('prefs-focus', '');
+            addRow.grab_focus();
+            // Focus alone does not scroll when the field was already the
+            // page's focus child, e.g. the window was left open and scrolled
+            // back up. The page scrolls through an Adw.ClampScrollable, not a
+            // Gtk.Viewport, so this centres the field by hand when it is off
+            // screen.
+            let scroller = addRow.get_ancestor(Gtk.ScrolledWindow);
+            let [ok, rect] = scroller ? addRow.compute_bounds(scroller) : [false, null];
+            if (!ok)
+                return;
+            let adj = scroller.vadjustment;
+            let top = rect.get_y();
+            let height = rect.get_height();
+            if (top < 0 || top + height > adj.page_size)
+                adj.value = adj.value + top - (adj.page_size - height) / 2;
+        };
+        // Waits for a painted, laid-out window, so the page can scroll down
+        // to the field. fillPreferencesWindow() can finish before or after
+        // the window is first shown.
+        const focusAfterPaint = () => {
+            let frameClock = window.get_frame_clock();
+            let paintId = frameClock.connect('after-paint', () => {
+                frameClock.disconnect(paintId);
+                focusAddClient();
+            });
+            window.queue_draw();
+        };
+        if (window.get_mapped()) {
+            focusAfterPaint();
+        } else {
+            let mapId = window.connect('map', () => {
+                window.disconnect(mapId);
+                focusAfterPaint();
+            });
+        }
+        const focusId = settings.connect('changed::prefs-focus', focusAddClient);
+        window.connect('close-request', () => {
+            settings.disconnect(focusId);
+            return false;
+        });
+
+        clientsGroup.add(new ShortcutRow(
+            settings, 'toggle-clock', 'Toggle the clock',
+            'Stops the clock, or starts the client you used last.'));
+
+        const nudgeRow = new Adw.SpinRow({
+            title: 'Nudge when idle',
+            subtitle: 'Minutes idle on the clock before a notification offers to stop it. 0 disables it.',
+            adjustment: new Gtk.Adjustment({ lower: 0, upper: 480, step_increment: 5 }),
+        });
+        settings.bind('clock-nudge-minutes', nudgeRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        clientsGroup.add(nudgeRow);
     }
 }

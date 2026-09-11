@@ -28,6 +28,9 @@ export class UsageTracker {
         // Called with (startMs, endMs, path, names) for every stretch
         // credited to the store, for the evidence log.
         this.onInterval = null;
+        // Called with the new presence whenever the user goes away or comes
+        // back.
+        this.onAway = null;
 
         // Where time is being credited right now: [appId], [appId, activityId]
         // or [appId, activityId, detailId], with matching display names. Null
@@ -96,6 +99,13 @@ export class UsageTracker {
         // that is already focused fires no focus change of its own. Sync once
         // from it: the same connect-then-call-once pattern extension.js uses.
         this._onFocus();
+    }
+
+    // Presence, for anything that must show "away but still on the clock".
+    // Not derivable from the interval stream: _flush credits nothing while
+    // away, so no interval is emitted for the gap.
+    get away() {
+        return this._away;
     }
 
     // (Re)installs the idle watch for the configured timeout. A timeout of 0
@@ -326,6 +336,7 @@ export class UsageTracker {
         // already null, so it only resets the clock for the app picked up next.
         this._flush(now);
         this._setCurrent(away ? null : this._currentApp());
+        this.onAway?.(away);
     }
 
     _onPresenceChanged() {
