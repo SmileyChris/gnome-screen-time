@@ -18,6 +18,7 @@ GLib.setenv('XDG_DATA_HOME', tmp, true);
 const FILES = [
     './zellijLayout.test.js',
     './usageStore.test.js',
+    './intervalLog.test.js',
     './activitySources.test.js',
     './browserSource.test.js',
     './rules.test.js',
