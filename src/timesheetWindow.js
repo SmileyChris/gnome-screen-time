@@ -34,10 +34,16 @@ function clockOf(ms) {
 }
 
 // Decimal hours for anything being billed; h/m for anything being read.
+// Rounds to whole minutes first, then derives hours and minutes from that
+// total - rounding each of h and m independently let 3599s print as "60m"
+// and 7199s print as "1h 60m".
 function formatHours(h) {
-    if (h >= 1)
-        return `${Math.floor(h)}h ${Math.round((h % 1) * 60)}m`;
-    return `${Math.round(h * 60)}m`;
+    let totalMinutes = Math.round(h * 60);
+    let hh = Math.floor(totalMinutes / 60);
+    let mm = totalMinutes % 60;
+    if (hh >= 1)
+        return `${hh}h ${mm}m`;
+    return `${mm}m`;
 }
 
 // UpdateSession never returns a raw code alone - each of the store's
@@ -94,6 +100,15 @@ export class TimesheetWindow {
         this._groups = [];
         this._refreshing = false;
         this._refreshPending = false;
+        // refresh() tears down and rebuilds every row from the server's
+        // copy, so anything the user typed or bumped but hasn't saved yet
+        // would otherwise vanish under an unrelated ClockChanged (starting
+        // a clock from the panel, another session's Save). Both are owned
+        // by the window, not by the widgets they seed, and survive the
+        // rebuild: _drafts carries unsaved edits per session id, and
+        // _expandedIds carries which rows should come back open.
+        this._drafts = new Map();
+        this._expandedIds = new Set();
         if (proxyError) {
             this._showError(`Could not reach the extension: ${proxyError.message}`);
             return;
@@ -105,8 +120,8 @@ export class TimesheetWindow {
     // Everything the Shell holds for the last 30 days. The Shell is the only
     // writer, so this process never reads a file.
     //
-    // ClockChanged fires on every Save and Reset now, and this method makes
-    // a blocking call in the middle of rebuilding _groups; a second,
+    // ClockChanged fires on every Save and "Use actual" now, and this method
+    // makes a blocking call in the middle of rebuilding _groups; a second,
     // overlapping refresh() would duplicate day groups. A refresh requested
     // while one is already running is not dropped, though - it is the one
     // reflecting whatever just changed, so it is coalesced into a single
@@ -132,6 +147,19 @@ export class TimesheetWindow {
             } catch (e) {
                 this._showError(`Could not reach the extension: ${e.message}`);
                 return;
+            }
+
+            // Drop state for sessions that fell out of the 30-day window or
+            // were deleted, so this never grows without bound and a stale
+            // draft can never reattach to a reused id.
+            let currentIds = new Set(sessions.map(s => s.id));
+            for (let id of this._drafts.keys()) {
+                if (!currentIds.has(id))
+                    this._drafts.delete(id);
+            }
+            for (let id of this._expandedIds) {
+                if (!currentIds.has(id))
+                    this._expandedIds.delete(id);
             }
 
             if (sessions.length === 0) {
@@ -191,11 +219,21 @@ export class TimesheetWindow {
         // would otherwise mean a month of range queries to draw one list.
         let loaded = false;
         row.connect('notify::expanded', () => {
+            if (row.expanded)
+                this._expandedIds.add(session.id);
+            else
+                this._expandedIds.delete(session.id);
             if (!row.expanded || loaded)
                 return;
             loaded = true;
             this._fillEvidence(row, session);
         });
+        // refresh() rebuilds this row from scratch, so a row the user had
+        // open is re-expanded here rather than coming back collapsed -
+        // which in turn re-fires the handler above and re-fetches its
+        // evidence, same as a first-time expand.
+        if (this._expandedIds.has(session.id))
+            row.expanded = true;
         return row;
     }
 
@@ -254,26 +292,64 @@ export class TimesheetWindow {
 
     // Returns the Bill row and the Note row together, so the caller adds
     // both without either method reaching into the other's state.
+    //
+    // Both widgets are backed by a draft owned by the window (this._drafts),
+    // not by the widgets themselves: refresh() rebuilds this row from
+    // scratch on every ClockChanged, which now fires on every Save and
+    // "Use actual" anywhere in the window, so anything typed or bumped but
+    // not yet saved must survive that rebuild rather than being seeded back
+    // to the server's last-saved values.
     _adjustRows(session, evidence) {
+        let seededNote = session.description.length > 0
+            ? session.description
+            : evidence.entries.slice(0, 2).map(e => e.displayName).join('; ');
+        let draft = this._drafts.get(session.id);
+        if (!draft) {
+            draft = { note: seededNote, hours: hoursOf(session), noteDirty: false, hoursDirty: false };
+            this._drafts.set(session.id, draft);
+        }
+
         let noteRow = new Adw.EntryRow({ title: 'Note' });
         // Seeded from the top activities, never auto-filled onto an
         // invoice: those strings are repository names, hostnames and
-        // subreddits. The person billing edits this before it means
-        // anything; nothing here is saved until they press Save.
-        noteRow.text = session.description.length > 0
-            ? session.description
-            : evidence.entries.slice(0, 2).map(e => e.displayName).join('; ');
+        // subreddits. The seed only reaches Save's payload if the user
+        // actually edits this field - see noteDirty below.
+        noteRow.text = draft.note;
 
         let hours = new Gtk.SpinButton({
             adjustment: new Gtk.Adjustment({
-                lower: 0, upper: 24, step_increment: 0.25, page_increment: 1,
-                value: hoursOf(session),
+                // 24 would clamp a clock left running over a weekend to
+                // "24.00 h", and Save would then write that ceiling as
+                // billedHours - permanently discarding the true value.
+                lower: 0, upper: 999, step_increment: 0.25, page_increment: 1,
+                value: draft.hours,
             }),
             digits: 2,
             valign: Gtk.Align.CENTER,
         });
 
+        // Connected after both widgets are seeded from the draft above, so
+        // restoring a draft (or seeding a fresh one) never itself marks
+        // anything dirty - only an edit the user makes here does.
+        noteRow.connect('notify::text', () => {
+            draft.note = noteRow.text;
+            draft.noteDirty = true;
+        });
+        hours.connect('value-changed', () => {
+            draft.hours = hours.value;
+            draft.hoursDirty = true;
+        });
+
+        // Renamed from "Reset" and moved away from Save: it sends
+        // billedHours alone (the note is left untouched, since
+        // UpdateSession only touches fields present in the payload), so a
+        // misclick next to Save no longer discards an adjustment with no
+        // way back.
+        let useActual = new Gtk.Button({ label: 'Use actual', css_classes: ['flat'] });
+        useActual.connect('clicked', () => this._updateSession(session, { billedHours: null }));
+
         let box = new Gtk.Box({ spacing: 6, valign: Gtk.Align.CENTER });
+        box.append(useActual);
         box.append(hours);
         for (let [label, delta] of [['¼', 0.25], ['½', 0.5], ['+1', 1]]) {
             let button = new Gtk.Button({ label, css_classes: ['flat'] });
@@ -287,20 +363,24 @@ export class TimesheetWindow {
         box.append(round);
 
         let save = new Gtk.Button({ label: 'Save', css_classes: ['suggested-action'] });
-        save.connect('clicked', () => this._updateSession(session, {
-            billedHours: Math.round(hours.value * 100) / 100,
-            description: noteRow.text,
-        }));
+        save.connect('clicked', () => {
+            if (!draft.hoursDirty && !draft.noteDirty) {
+                this._toast('Nothing to save.');
+                return;
+            }
+            // Send only what was actually edited: an hours-only edit must
+            // not re-pin the note to its unedited seed (repository names,
+            // hostnames, subreddits reaching an invoice), and a note-only
+            // edit (fixing a typo) must not pin billedHours to a snapshot
+            // that stops following later start/end edits.
+            let fields = {};
+            if (draft.hoursDirty)
+                fields.billedHours = Math.round(hours.value * 100) / 100;
+            if (draft.noteDirty)
+                fields.description = noteRow.text.trim();
+            this._updateSession(session, fields);
+        });
         box.append(save);
-
-        // The only way back to "bill the actual time" once an adjustment is
-        // set: Save alone can approximate that by re-typing the actual
-        // hours, but never undo the adjustment itself. Sends billedHours
-        // alone - the note is left untouched, since UpdateSession only
-        // touches fields present in the payload.
-        let reset = new Gtk.Button({ label: 'Reset', css_classes: ['flat'] });
-        reset.connect('clicked', () => this._updateSession(session, { billedHours: null }));
-        box.append(reset);
 
         let hoursRow = new Adw.ActionRow({
             title: 'Bill',
@@ -311,16 +391,21 @@ export class TimesheetWindow {
         return [hoursRow, noteRow];
     }
 
-    // Shared by Save and Reset: both send a partial fields payload and
-    // report a rejection through a toast. A successful update fires
-    // ClockChanged, which refreshes the whole list, so there is nothing
-    // else to do here on success.
+    // Shared by Save and "Use actual": both send a partial fields payload
+    // and report a rejection through a toast. A successful update fires
+    // ClockChanged, which rebuilds this row from the server's copy, so the
+    // local draft - now stale - is cleared here rather than left to
+    // silently reappear as unsaved on the next refresh. A rejected or
+    // failed call leaves the draft in place so nothing typed is lost.
     _updateSession(session, fields) {
         try {
             let [json] = this._proxy.UpdateSessionSync(session.id, JSON.stringify(fields));
             let result = JSON.parse(json);
-            if (result.error)
+            if (result.error) {
                 this._toast(describeUpdateError(result.error));
+                return;
+            }
+            this._drafts.delete(session.id);
         } catch (e) {
             this._toast(`Failed: ${e.message}`);
         }
