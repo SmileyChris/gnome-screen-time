@@ -35,16 +35,30 @@ build: schemas
 # the old inode intact for anything still holding it. The staging copy sits on
 # the same filesystem as the extensions directory but outside it, so GNOME
 # never scans a half-built copy.
+#
+# Two safety nets around the swap itself, because $old is briefly the only
+# copy that exists: if a previous run was interrupted between its two
+# renames, $ext is gone and $old still holds the last good install - that is
+# healed (old moved back to ext) before anything else runs, so a retry can
+# never delete the only surviving copy. And if the final `mv "$stage" "$ext"`
+# itself fails (permissions, ENOSPC, EIO), $old is moved straight back to
+# $ext so a failed install never leaves nothing installed at all.
 install: build
 	@set -e; \
 	ext='$(EXTENSION_DIR)'; \
+	if [ -z "$$ext" ]; then echo "install: EXTENSION_DIR must not be empty" >&2; exit 1; fi; \
 	root=$$(dirname "$$(dirname "$$ext")"); \
 	stage="$$root/.$(UUID).staging"; old="$$root/.$(UUID).old"; \
-	rm -rf "$$stage" "$$old"; \
+	if [ ! -e "$$ext" ] && [ -e "$$old" ]; then mv "$$old" "$$ext"; fi; \
+	rm -rf "$$old" "$$stage"; \
 	mkdir -p "$$(dirname "$$ext")"; \
-	cp -r $(SRC_DIR) "$$stage"; \
+	cp -r "$(SRC_DIR)" "$$stage"; \
 	if [ -e "$$ext" ]; then mv "$$ext" "$$old"; fi; \
-	mv "$$stage" "$$ext"; \
+	if ! mv "$$stage" "$$ext"; then \
+		if [ -e "$$old" ]; then mv "$$old" "$$ext"; fi; \
+		echo "install: FAILED to activate new copy at $$ext; rolled back to the previous install" >&2; \
+		exit 1; \
+	fi; \
 	rm -rf "$$old"; \
 	echo "Installed to $$ext"
 	@# A dev copy from `make reload` would otherwise stay enabled across

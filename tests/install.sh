@@ -42,6 +42,9 @@ EXT_DIR="$ROOT/gnome-shell/extensions/$UUID"
 DEV_UUID_FILE="$ROOT/no-dev-uuid"
 SRC_A="$ROOT/srcA"
 SRC_B="$ROOT/srcB"
+EXT_PARENT_PARENT=$(dirname "$(dirname "$EXT_DIR")")
+STAGE_DIR="$EXT_PARENT_PARENT/.$UUID.staging"
+OLD_DIR="$EXT_PARENT_PARENT/.$UUID.old"
 
 # Guard checked against the actual path this run will use, before the first
 # `make` call is even assembled below.
@@ -75,11 +78,31 @@ if diff -q \
     exit 1
 fi
 
+# The optional second argument is prepended to PATH, so (e) and (f) below can
+# put a failing `mv` shim in front of the real one without affecting (a)-(d).
 run_make_install() {
-    local src_dir="$1"
-    make -C "$REPO_ROOT" --no-print-directory install \
+    local src_dir="$1" path_prefix="${2:-}"
+    env PATH="${path_prefix:+$path_prefix:}$PATH" \
+        make -C "$REPO_ROOT" --no-print-directory install \
         EXTENSION_DIR="$EXT_DIR" SRC_DIR="$src_dir" DEV_UUID_FILE="$DEV_UUID_FILE"
 }
+
+# A `mv` shim that fails only the exact rename that swaps the freshly built
+# staging copy into place ($stage -> $ext in the Makefile's install recipe),
+# and otherwise defers to the real `mv`. Used by (e) and (f) below to force
+# install's final rename to fail without needing a real filesystem failure.
+BIN_DIR="$ROOT/bin"
+mkdir -p "$BIN_DIR"
+REAL_MV=$(command -v mv)
+cat > "$BIN_DIR/mv" <<SHIM
+#!/usr/bin/env bash
+if [ "\$1" = "$STAGE_DIR" ] && [ "\$2" = "$EXT_DIR" ]; then
+    echo "mv: simulated failure (install.sh test shim)" >&2
+    exit 1
+fi
+exec "$REAL_MV" "\$@"
+SHIM
+chmod +x "$BIN_DIR/mv"
 
 # --- Install A, then record the inode of its compiled schema. -------------
 run_make_install "$SRC_A" >/dev/null
@@ -187,11 +210,67 @@ if ! cmp -s "$SCHEMA_FILE" "$SRC_B/schemas/gschemas.compiled"; then
 fi
 
 # --- (d) neither the staging nor the .old directory is left behind. -------
-EXT_PARENT_PARENT=$(dirname "$(dirname "$EXT_DIR")")
-STAGE_DIR="$EXT_PARENT_PARENT/.$UUID.staging"
-OLD_DIR="$EXT_PARENT_PARENT/.$UUID.old"
 if [ -e "$STAGE_DIR" ] || [ -e "$OLD_DIR" ]; then
     echo "install: FAIL - (d) leftover directory after install (staging: $STAGE_DIR, old: $OLD_DIR)" >&2
+    exit 1
+fi
+
+# --- (e) a failed final rename must roll back to the previous good install.
+# Start clean, install A normally, then install B with the failing `mv`
+# shim active so the swap's last step (`mv "$stage" "$ext"`) fails. install
+# must exit non-zero, and the extension directory must still be exactly A -
+# not missing, not half-swapped.
+rm -rf "$EXT_DIR" "$STAGE_DIR" "$OLD_DIR"
+run_make_install "$SRC_A" >/dev/null
+
+set +e
+E_OUTPUT=$(run_make_install "$SRC_B" "$BIN_DIR" 2>&1)
+E_STATUS=$?
+set -e
+
+if [ "$E_STATUS" -eq 0 ]; then
+    echo "install: FAIL - (e) make install succeeded despite the failing rename shim" >&2
+    exit 1
+fi
+
+if [ ! -d "$EXT_DIR" ]; then
+    echo "install: FAIL - (e) extension directory missing after a failed install (no rollback); make output: $E_OUTPUT" >&2
+    exit 1
+fi
+
+if ! cmp -s "$EXT_DIR/schemas/gschemas.compiled" "$SRC_A/schemas/gschemas.compiled"; then
+    echo "install: FAIL - (e) extension directory does not hold A's schema after the failed install; make output: $E_OUTPUT" >&2
+    exit 1
+fi
+
+# --- (f) an interrupted run must be healed, never destroyed on retry. -----
+# Hand-construct the state a run interrupted between its two renames would
+# leave: $ext absent, $old holding A's already-built install (exactly what
+# `mv "$ext" "$old"` produces, one step before the recipe would normally
+# move stage -> ext). Then install B with the failing shim active again:
+# install must first heal $old back onto $ext, then fail the swap and roll
+# back again - at no point may the only surviving copy be deleted.
+rm -rf "$EXT_DIR" "$STAGE_DIR" "$OLD_DIR"
+run_make_install "$SRC_A" >/dev/null
+mv "$EXT_DIR" "$OLD_DIR"
+
+set +e
+F_OUTPUT=$(run_make_install "$SRC_B" "$BIN_DIR" 2>&1)
+F_STATUS=$?
+set -e
+
+if [ "$F_STATUS" -eq 0 ]; then
+    echo "install: FAIL - (f) make install succeeded despite the failing rename shim" >&2
+    exit 1
+fi
+
+if [ ! -d "$EXT_DIR" ]; then
+    echo "install: FAIL - (f) extension directory missing after healing an interrupted run and a failed install (only copy destroyed); make output: $F_OUTPUT" >&2
+    exit 1
+fi
+
+if ! cmp -s "$EXT_DIR/schemas/gschemas.compiled" "$SRC_A/schemas/gschemas.compiled"; then
+    echo "install: FAIL - (f) extension directory does not hold A's schema after healing and rollback; make output: $F_OUTPUT" >&2
     exit 1
 fi
 
