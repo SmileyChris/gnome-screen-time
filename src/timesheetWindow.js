@@ -276,8 +276,16 @@ export class TimesheetWindow {
         });
     }
 
-    // Everything the Shell holds for the last 30 days. The Shell is the only
-    // writer, so this process never reads a file.
+    // Everything the Shell holds from the first day of last month to now.
+    // The Shell is the only writer, so this process never reads a file.
+    //
+    // Anchored to a calendar boundary, not a fixed span: the "Last month"
+    // export (_export(), above) can reach back up to ~61 days (the 1st of
+    // last month, from as late as the last day of this month), and a fixed
+    // 30-day window would let the start of that period be exported without
+    // ever being reviewable here. Recomputed on every refresh() rather than
+    // cached, so the window doesn't need its own day-rollover timer to
+    // notice midnight passing while it's open.
     //
     // ClockChanged fires on every Save and "Use actual" now, and this method
     // makes a blocking call in the middle of rebuilding _groups; a second,
@@ -303,7 +311,9 @@ export class TimesheetWindow {
             this._liveRows.clear();
 
             let to = Date.now();
-            let from = to - 30 * 24 * 3600 * 1000;
+            let now = GLib.DateTime.new_now_local();
+            let firstOfThisMonth = GLib.DateTime.new_local(now.get_year(), now.get_month(), 1, 0, 0, 0);
+            let from = firstOfThisMonth.add_months(-1).to_unix() * 1000;
             let sessions;
             try {
                 let [json] = this._proxy.GetSessionsSync(from, to);
