@@ -1059,8 +1059,17 @@ test('ClockStore: read-only mode also engages when a corrupt file cannot be back
 test('ClockStore: a 0-byte clock.json loads as empty, writes no backup, and later saves normally', () => {
     GLib.unlink(CLOCK_FILE);
     deleteBackupFiles();
-    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
-        new Uint8Array(0), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+    // NOT Gio.File.replace_contents(new Uint8Array(0), ...): in this GJS
+    // that hits the same `contents != NULL` precondition failure the
+    // source fix handles and never actually creates the file at all - a
+    // fixture built that way would silently test the missing-file path
+    // instead, which happens to assert the same outcomes for the wrong
+    // reason. GLib.file_set_contents() genuinely writes a 0-byte file.
+    GLib.file_set_contents(CLOCK_FILE, '');
+    let fixture = Gio.File.new_for_path(CLOCK_FILE);
+    assert(fixture.query_exists(null), 'the fixture file must actually exist');
+    let info = fixture.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
+    assertEqual(info.get_size(), 0, 'the fixture file must genuinely be 0 bytes');
 
     let clock = new ClockStore(new FakeSettings());
     assertEqual(clock._sessions, [], 'an empty file has no sessions to load');
@@ -1202,4 +1211,88 @@ test("ClockStore: closeForShutdown falls back to the session's own lastSeenMs fo
     let closed = clock.closeForShutdown(NaN);
     assertEqual(closed.endMs, t, 'no heartbeat happened, so lastSeenMs is still the start time');
     clock.destroy();
+});
+
+// --- update()'s own nowMs must not be able to defeat the overlap check ---
+//
+// _overlaps() falls back to `nowMs` for any session still open (endMs ??
+// nowMs). Every comparison against NaN is false, so a NaN or otherwise
+// out-of-range nowMs made the overlap check never fire, letting update()
+// persist two overlapping sessions to disk.
+
+test('ClockStore: update rejects a NaN or astronomical nowMs before it can defeat the overlap check', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    let acme = clock.start('ACME', t);
+    clock.stop(t + 3600000);                       // ACME: 9:00-10:00
+    let beta = clock.start('BETA', t + 7200000);    // BETA: running from 11:00
+
+    let acmeBefore = JSON.parse(JSON.stringify(acme));
+    let betaBefore = JSON.parse(JSON.stringify(beta));
+
+    // Sanity check: extending ACME's end to 11:30 overlaps BETA's
+    // still-open span, and a real nowMs correctly catches it.
+    let threw = null;
+    try {
+        clock.update(acme.id, { endMs: t + 9000000 }, t + 9000000);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'overlap', 'sanity check: a real nowMs still catches the overlap');
+
+    for (let badNowMs of [NaN, 1e300]) {
+        threw = null;
+        try {
+            clock.update(acme.id, { endMs: t + 9000000 }, badNowMs);
+        } catch (e) {
+            threw = e.message;
+        }
+        assertEqual(threw, 'invalid', `nowMs = ${badNowMs}`);
+        assertEqual(acme, acmeBefore, `ACME unchanged in memory (nowMs = ${badNowMs})`);
+        assertEqual(beta, betaBefore, `BETA unchanged in memory (nowMs = ${badNowMs})`);
+    }
+
+    clock.destroySilently();
+    let reopened = new ClockStore(settings);
+    assertEqual(reopened.sessionById(acme.id), acmeBefore, 'ACME on disk was never touched either');
+    assertEqual(reopened.sessionById(beta.id), betaBefore, 'nor was BETA');
+    reopened.destroy();
+});
+
+// --- recover() and a wrong clock ---
+//
+// recover() runs once, at enable(). On a machine whose clock is wrong it
+// cannot distinguish a genuine `make reload` from a real outage, so an
+// out-of-range nowMs must not let it guess either way by resuming or
+// closing a session.
+
+test('ClockStore: recover does nothing for an out-of-range nowMs, leaving a recently-heartbeated session running', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 5000);   // heartbeated 5 seconds ago - well within RESUME_GAP_MS
+    clock.destroySilently();     // simulates a crash: left open on disk, not cleanly closed
+
+    let [, bytesBefore] = Gio.File.new_for_path(CLOCK_FILE).load_contents(null);
+
+    let reopened = new ClockStore(settings);
+    let before = JSON.parse(JSON.stringify(reopened.running));
+    let fired = 0;
+    reopened.onChange = () => { fired++; };
+
+    assertEqual(reopened.recover(NaN), null, 'a wrong-clock nowMs cannot tell a reload from an outage');
+    assertEqual(reopened.running, before, 'still open, completely unchanged');
+    assertEqual(reopened.running.interrupted, false, 'not marked interrupted either');
+
+    assertEqual(reopened.recover(1e300), null, 'same for an astronomically large nowMs');
+    assertEqual(reopened.running, before, 'still unchanged');
+
+    assertEqual(fired, 0, 'neither call triggered a save or a notification');
+    reopened.destroySilently();
+
+    let [, bytesAfter] = Gio.File.new_for_path(CLOCK_FILE).load_contents(null);
+    assertEqual(new TextDecoder().decode(bytesAfter), new TextDecoder().decode(bytesBefore),
+        'the file on disk is byte-identical to what it was before either recover() call');
 });

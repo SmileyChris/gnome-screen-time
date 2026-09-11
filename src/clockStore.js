@@ -431,6 +431,16 @@ export class ClockStore {
     // grace under RESUME_GAP_MS; every other open session is closed
     // unconditionally at its own lastSeenMs, whatever its age.
     recover(nowMs = Date.now()) {
+        // Runs once, at enable(). On a machine whose clock is wrong (the
+        // same dead-CMOS-battery scenario start()/stop()/heartbeat() guard
+        // against), nowMs - lastSeenMs is meaningless: it cannot tell a
+        // genuine `make reload` from a real outage, so it must not guess
+        // either way. Doing nothing leaves the open session exactly as
+        // found - not resumed, not closed, not split - for a later,
+        // correctly-timed recover() to resolve once the clock is sane.
+        if (!isValidTimestamp(nowMs))
+            return null;
+
         let open = this._sessions.filter(s => s.endMs === null);
         if (open.length === 0)
             return null;
@@ -476,6 +486,14 @@ export class ClockStore {
     }
 
     update(id, fields, nowMs = Date.now()) {
+        // Every comparison against NaN is false, so an out-of-range nowMs
+        // would make _overlaps() below never detect a conflict - exactly
+        // the hole that let this persist two overlapping sessions to disk.
+        // Checked first, before even looking up the session, so a bad
+        // value can never reach any check that assumes a sane "now".
+        if (!isValidTimestamp(nowMs))
+            throw new Error('invalid');
+
         let session = this._sessions.find(s => s.id === id);
         if (!session)
             return null;
