@@ -1,6 +1,7 @@
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
@@ -275,10 +276,24 @@ export class PopupWidget {
         let running = isToday ? (this._clock?.running ?? null) : null;
         let clockBox = new St.BoxLayout({ vertical: true, y_align: Clutter.ActorAlign.CENTER });
         if (isToday) {
-            clockBox.add_child(new St.Label({
+            // Client names are free-form and unbounded, unlike every other
+            // label in this card - a long one must not stretch clockBox
+            // (and so the card, and so the popup) past ROW_W. Capped to
+            // roughly a third of ROW_W, leaving room for the screen-time
+            // half, the divider and the Start/Stop button; clockBox itself
+            // has no explicit width, so once this label's natural width is
+            // capped, clockBox's own natural width shrinks with it instead
+            // of growing to fit the untruncated text. The full name stays
+            // visible in the clock rows below (ClockSection), which already
+            // ellipsize the same way.
+            let clientLabel = new St.Label({
                 text: running ? running.client : 'Not clocked',
-                style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';',
-            }));
+                x_expand: true,
+                style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';' +
+                       ` max-width: ${Math.round(ROW_W / 3)}px;`,
+            });
+            clientLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+            clockBox.add_child(clientLabel);
             let billedToday = this._clock ? this._clock.billedSecondsForDay(this._date) : 0;
             clockBox.add_child(new St.Label({
                 text: billedToday > 0 ? `today ${formatTime(billedToday)}` : '—',
@@ -317,7 +332,9 @@ export class PopupWidget {
                 y_align: Clutter.ActorAlign.CENTER,
                 reactive: canStart,
                 can_focus: canStart,
-                opacity: canStart ? 255 : DIM_OPACITY,
+                // Same disabled dimming as _navButton()'s arrows, so every
+                // disabled control in this popup looks the same.
+                opacity: canStart ? 255 : 55,
             });
             if (canStart) {
                 toggle.connect('clicked', () => {
