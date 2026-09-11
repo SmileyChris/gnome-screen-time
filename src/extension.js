@@ -58,6 +58,11 @@ export default class ScreenTimeExtension extends Extension {
             'changed::show-total-in-panel', () => this._syncPanelLabel(), this);
         this._syncPanelLabel();
 
+        // ClockDBus wraps clock.onChange, chaining through whatever handler
+        // is already there. Any code that wants to set clock.onChange
+        // itself must do so BEFORE this line: an assignment after this
+        // point silently replaces ClockDBus's wrapper, and ClockChanged
+        // stops firing over D-Bus with no error anywhere.
         this._clockDbus = new ClockDBus(this._clock, this._intervals, this._settings);
 
         // Registered last: if anything above throws, enable() aborts and the

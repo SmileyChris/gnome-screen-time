@@ -58,6 +58,11 @@ export class ClockDBus {
         this._settings = settings;
         this._impl = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
         this._impl.export(Gio.DBus.session, OBJECT_PATH);
+        // Captures whatever handler is already on clock.onChange and chains
+        // through it. Anything else that wants to observe the clock must
+        // set clock.onChange BEFORE this constructor runs: an assignment
+        // after this point replaces this wrapper outright, and ClockChanged
+        // would silently stop firing - no error, no signal, nothing.
         this._prevOnChange = clock.onChange;
         clock.onChange = () => {
             this._prevOnChange?.();
@@ -74,8 +79,7 @@ export class ClockDBus {
     }
 
     GetEvidence(sessionId) {
-        let session = this._clock.sessionsInRange(0, Date.now())
-            .find(s => s.id === sessionId);
+        let session = this._clock.sessionById(sessionId);
         if (!session)
             return JSON.stringify({ error: 'missing' });
         // Buffered intervals have not reached disk, and query() reads
@@ -86,7 +90,11 @@ export class ClockDBus {
     }
 
     StartSession(client) {
-        return JSON.stringify(this._clock.start(client));
+        try {
+            return JSON.stringify(this._clock.start(client));
+        } catch (e) {
+            return JSON.stringify({ error: e.message });
+        }
     }
 
     StopSession() {

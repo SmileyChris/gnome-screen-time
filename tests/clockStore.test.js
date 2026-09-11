@@ -781,3 +781,207 @@ test('ClockStore: load fills in defaults for a record missing interrupted/cleanS
     assertEqual(listBackupFiles().length, 0, 'missing optional fields are not corruption; no backup');
     clock.destroy();
 });
+
+// --- _load() must never silently empty a file it cannot parse ---
+//
+// A file that exists but cannot be turned into a sessions array at all
+// (unparseable JSON, a non-object top level, or `sessions` not itself an
+// array) is a different failure from "one bad record among good ones"
+// above: there are no records to salvage, so the whole file must be backed
+// up before _sessions is set to []. Without that, the very next save (any
+// tap of the clock) overwrites the file with nothing and the user's whole
+// billing history is gone with no trace. A genuinely missing file - the
+// normal first run - must still produce no backup and no error.
+
+function expectMalformedFileBackedUp(rawText) {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(rawText), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    assertEqual(clock._sessions, [], 'nothing loads from a file that could not be read as a sessions array');
+
+    let backups = listBackupFiles();
+    assertEqual(backups.length, 1, 'exactly one backup written');
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    let backupFile = Gio.File.new_for_path(GLib.build_filenamev([dir, backups[0]]));
+    let [, backupBytes] = backupFile.load_contents(null);
+    assertEqual(new TextDecoder().decode(backupBytes), rawText, 'the backup is byte-for-byte the original file');
+
+    // A start() (and the immediate save it triggers) must not disturb the
+    // backup: the corrupt original stays recoverable even once the clock is
+    // used again.
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    assertEqual(listBackupFiles(), backups, 'the backup file is untouched by a later save');
+    let [, sameBytes] = backupFile.load_contents(null);
+    assertEqual(new TextDecoder().decode(sameBytes), rawText, 'and still byte-identical after that save');
+
+    deleteBackupFiles();
+    clock.destroy();
+}
+
+test('ClockStore: load backs up unparseable JSON instead of silently emptying it', () => {
+    expectMalformedFileBackedUp('{ this is not json');
+});
+
+test('ClockStore: load backs up a top-level array instead of silently emptying it', () => {
+    expectMalformedFileBackedUp('[1,2,3]');
+});
+
+test('ClockStore: load backs up a top-level string instead of silently emptying it', () => {
+    expectMalformedFileBackedUp('"just a string"');
+});
+
+test('ClockStore: load backs up a top-level null instead of silently emptying it', () => {
+    expectMalformedFileBackedUp('null');
+});
+
+test('ClockStore: load backs up a clock.json whose sessions field is not an array', () => {
+    expectMalformedFileBackedUp(JSON.stringify({ sessions: 'oops' }));
+});
+
+test('ClockStore: load performs no backup when clock.json is simply missing', () => {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    let clock = new ClockStore(new FakeSettings());
+    assertEqual(clock._sessions, [], 'nothing to load');
+    assertEqual(listBackupFiles().length, 0, 'a missing file is the normal first run, not corruption');
+    clock.destroy();
+});
+
+// --- timestamp magnitude bounds ---
+//
+// Number.isInteger(1e300) is true, so a bare finite-integer check lets a
+// wildly out-of-range value through validation, into Object.assign, and
+// only then does deriving a calendar day from it throw - after the session
+// was already mutated. Every timestamp field must reject values outside a
+// sane calendar window, not just non-integers and non-finite values.
+
+test('ClockStore: update rejects an astronomically large startMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { startMs: 1e300 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a startMs just past Number.MAX_SAFE_INTEGER', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { startMs: Number.MAX_SAFE_INTEGER + 2 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects an astronomically large endMs without corrupting the billed total', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    expectInvalid(clock, session, { endMs: 1e300 });
+    // The bug this guards against: without a magnitude bound this would not
+    // throw at all, and billedSecondsForDay would return something like
+    // 1e297 instead of a sane number of seconds.
+    assert(clock.running !== null, 'the session was never actually closed');
+    clock.destroy();
+});
+
+test('ClockStore: update rejects an endMs just past Number.MAX_SAFE_INTEGER', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    expectInvalid(clock, session, { endMs: Number.MAX_SAFE_INTEGER + 2 });
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a startMs before the year 2000', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { startMs: 946684799999 });   // one ms before the window opens
+    clock.destroy();
+});
+
+test('ClockStore: update rejects a startMs at or after the year 2100', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    expectInvalid(clock, session, { startMs: 4102444800000 });   // exactly the excluded upper bound
+    clock.destroy();
+});
+
+test('ClockStore: update still accepts an ordinary 2026 startMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let updated = clock.update(session.id, { startMs: t + 60000 });
+    assertEqual(updated.startMs, t + 60000, 'a normal in-range value is unaffected by the new bound');
+    clock.destroy();
+});
+
+// --- update() computes dayKey before mutating, not after ---
+
+test('ClockStore: update moving startMs across a day boundary re-derives dayKey atomically', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 23, 30);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    // Move the start to the next day: dayKey must be re-derived to match,
+    // and it must land together with startMs in the same update - never one
+    // without the other.
+    let nextDay = at(2026, 9, 12, 0, 15);
+    let updated = clock.update(session.id, { startMs: nextDay });
+    assertEqual(updated.startMs, nextDay);
+    assertEqual(updated.dayKey, '2026-09-12');
+    clock.destroy();
+});
+
+// --- start() type validation ---
+
+test('ClockStore: start rejects an empty client', () => {
+    let clock = freshClock();
+    let threw = null;
+    try {
+        clock.start('', at(2026, 9, 11, 9, 0));
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running, null, 'nothing was started');
+    assertEqual(clock._sessions, [], 'the store is untouched');
+    clock.destroy();
+});
+
+test('ClockStore: start rejects a whitespace-only client', () => {
+    let clock = freshClock();
+    let threw = null;
+    try {
+        clock.start('   ', at(2026, 9, 11, 9, 0));
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running, null);
+    assertEqual(clock._sessions, []);
+    clock.destroy();
+});
+
+// --- sessionById ---
+
+test('ClockStore: sessionById finds a session by id regardless of its start time relative to now', () => {
+    let clock = freshClock();
+    // Deliberately "future" relative to any real wall-clock test run, unlike
+    // sessionsInRange(0, Date.now()), which a future-dated session would
+    // fall outside of.
+    let future = at(2030, 1, 1, 9, 0);
+    let session = clock.start('ACME', future);
+    assertEqual(clock.sessionById(session.id), session);
+    assertEqual(clock.sessionById('does-not-exist'), null);
+    clock.destroy();
+});

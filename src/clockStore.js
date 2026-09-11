@@ -25,12 +25,24 @@ function newId() {
 // make the whole call fail.
 const UPDATABLE_FIELDS = ['billedHours', 'description', 'startMs', 'endMs', 'client'];
 
-function isFiniteInteger(value) {
-    return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value);
-}
-
 function isFiniteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value);
+}
+
+// Sane bounds for any epoch-ms timestamp this module writes or accepts:
+// 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive).
+// Number.isInteger(1e300) is true, so a bare finite-integer check lets a
+// wildly out-of-range value through: it would pass validation, get written
+// by Object.assign, and only then blow up GLib.DateTime.new_from_unix_local
+// (or some later consumer) with "value is out of range for int64" - after
+// the session was already mutated. Bounding the magnitude here keeps that
+// failure at validation time, before anything is touched, for every caller.
+const MIN_TIMESTAMP_MS = 946684800000;   // 2000-01-01T00:00:00Z
+const MAX_TIMESTAMP_MS = 4102444800000;  // 2100-01-01T00:00:00Z, exclusive
+
+function isValidTimestamp(value) {
+    return Number.isSafeInteger(value) &&
+        value >= MIN_TIMESTAMP_MS && value < MAX_TIMESTAMP_MS;
 }
 
 // Per-field type rules shared by update() and _load(). update() is reached
@@ -52,16 +64,16 @@ function isValidField(key, value) {
         return typeof value === 'string';
     case 'startMs':
     case 'lastSeenMs':
-        return isFiniteInteger(value);
+        return isValidTimestamp(value);
     case 'endMs':
-        return value === null || isFiniteInteger(value);
+        return value === null || isValidTimestamp(value);
     case 'billedHours':
         return value === null || (isFiniteNumber(value) && value >= 0);
     case 'interrupted':
     case 'cleanStop':
         return typeof value === 'boolean';
     case 'exportedAt':
-        return value === null || isFiniteNumber(value);
+        return value === null || isValidTimestamp(value);
     default:
         return true;
     }
@@ -155,31 +167,71 @@ export class ClockStore {
     _load() {
         let file = Gio.File.new_for_path(CLOCK_FILE);
         if (!file.query_exists(null))
-            return;
+            return;   // first run: nothing to load, nothing to back up
+
+        let contents;
         try {
-            let [, contents] = file.load_contents(null);
-            let data = JSON.parse(new TextDecoder().decode(contents));
-            let records = Array.isArray(data.sessions) ? data.sessions : [];
-            let valid = [];
-            let invalidCount = 0;
-            for (let record of records) {
-                if (isValidSessionRecord(record))
-                    valid.push(normalizeSessionRecord(record));
-                else
-                    invalidCount++;
-            }
-            // Never silently discard a billing record: an invalid one is
-            // excluded from memory, but the file it came from is preserved
-            // byte-for-byte first - once per load, not once per record.
-            if (invalidCount > 0) {
-                let backupPath = this._backupCorruptFile(contents);
-                console.error(`[ScreenTime] clock load: excluded ${invalidCount} invalid ` +
-                    `session record(s); original backed up to ${backupPath}`);
-            }
-            this._sessions = valid;
+            [, contents] = file.load_contents(null);
         } catch (e) {
+            // The bytes themselves could not be read (permissions, I/O
+            // error). There is nothing here to back up, but the file on
+            // disk is untouched, so nothing has been lost either.
             console.error(`[ScreenTime] clock load error: ${e.message}`);
+            return;
         }
+
+        let records = this._parseSessionRecords(contents);
+        if (records === null) {
+            // Unparseable JSON, a non-object top level, or a `sessions`
+            // that isn't an array: never default to an empty session list
+            // silently here. The next _save() - any tap of the clock -
+            // would otherwise overwrite the file with nothing, discarding
+            // the user's whole billing history with no trace. Back the raw
+            // bytes up first, then start from empty.
+            let backupPath = this._backupCorruptFile(contents);
+            console.error('[ScreenTime] clock load: clock.json is malformed and could not ' +
+                `be read as a sessions array; original backed up to ${backupPath}`);
+            this._sessions = [];
+            return;
+        }
+
+        let valid = [];
+        let invalidCount = 0;
+        for (let record of records) {
+            if (isValidSessionRecord(record))
+                valid.push(normalizeSessionRecord(record));
+            else
+                invalidCount++;
+        }
+        // Never silently discard a billing record: an invalid one is
+        // excluded from memory, but the file it came from is preserved
+        // byte-for-byte first - once per load, not once per record.
+        if (invalidCount > 0) {
+            let backupPath = this._backupCorruptFile(contents);
+            console.error(`[ScreenTime] clock load: excluded ${invalidCount} invalid ` +
+                `session record(s); original backed up to ${backupPath}`);
+        }
+        this._sessions = valid;
+    }
+
+    // Parses `contents` (the raw bytes of clock.json) into its `sessions`
+    // array. Returns null - never an empty array - when the bytes cannot be
+    // turned into one: unparseable JSON, a non-object (or array) top level,
+    // or a `sessions` key that isn't itself an array. null is _load()'s
+    // signal to back the file up rather than silently proceeding as if it
+    // held zero sessions.
+    _parseSessionRecords(contents) {
+        let data;
+        try {
+            data = JSON.parse(new TextDecoder().decode(contents));
+        } catch (e) {
+            return null;
+        }
+        if (typeof data !== 'object' || data === null || Array.isArray(data))
+            return null;
+        if (!Array.isArray(data.sessions))
+            return null;
+        return data.sessions;
     }
 
     // Copies the as-loaded bytes verbatim, before anything is excluded, so a
@@ -228,6 +280,13 @@ export class ClockStore {
     }
 
     start(client, nowMs = Date.now()) {
+        // Same rule update() applies to `client`: reached over D-Bus as
+        // StartSession(client), so this can be anything JSON can carry,
+        // including "" or whitespace. Checked first, before anything else,
+        // so a rejected call never touches the store.
+        if (!isValidField('client', client))
+            throw new Error('invalid');
+
         let current = this.running;
         if (current && current.client === client)
             return current;
@@ -372,14 +431,22 @@ export class ClockStore {
         if (this._overlaps(next, nowMs))
             throw new Error('overlap');
 
-        Object.assign(session, allowed);
         // Moving a start across the boundary re-files the session, which is
-        // the one case where dayKey legitimately changes.
-        if (allowed.startMs !== undefined) {
-            session.dayKey = dateKey(
-                GLib.DateTime.new_from_unix_local(session.startMs / 1000),
-                this._dayStartHour());
-        }
+        // the one case where dayKey legitimately changes. Derived here, on
+        // `next`, before anything is mutated: every check above has already
+        // passed, but deriving a calendar day from an instant is itself an
+        // operation that can fail (an out-of-range value slipping past
+        // isValidTimestamp some other way, a GLib quirk), and it must not
+        // be able to throw after Object.assign has already run - that was
+        // the exact bug where a bad startMs got written, then the dayKey
+        // re-stamp threw, leaving the session mutated in memory with
+        // nothing to undo it.
+        let nextDayKey = allowed.startMs !== undefined
+            ? dateKey(GLib.DateTime.new_from_unix_local(next.startMs / 1000), this._dayStartHour())
+            : session.dayKey;
+
+        Object.assign(session, allowed);
+        session.dayKey = nextDayKey;
         this._changed();
         return session;
     }
@@ -403,6 +470,12 @@ export class ClockStore {
         this._sessions.splice(i, 1);
         this._changed();
         return true;
+    }
+
+    // Unlike sessionsInRange(), not bounded by "now" - a session started in
+    // the future (however that came about) must still be findable by id.
+    sessionById(id) {
+        return this._sessions.find(s => s.id === id) ?? null;
     }
 
     sessionsInRange(fromMs, toMs, nowMs = Date.now()) {
