@@ -8,6 +8,10 @@ import Gtk from 'gi://Gtk?version=4.0';
 // copy: a method added to ClockDBus then exists on both sides by
 // construction, instead of silently drifting out of sync here.
 import { INTERFACE_XML } from './clockDBus.js';
+// parseClock lives in its own portable module (GLib only, no Adw/Gtk) so it
+// can be unit-tested directly rather than only ever exercised through this
+// GTK-dependent window.
+import { parseClock } from './clockTime.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
@@ -31,30 +35,6 @@ function actualHoursOf(session) {
 
 function clockOf(ms) {
     return GLib.DateTime.new_from_unix_local(ms / 1000).format('%H:%M');
-}
-
-// "HH:MM" on the same calendar day as `referenceMs`. Returns null if the text
-// is not a time, so the caller can say so rather than writing a NaN.
-//
-// Callers always pass the field's OWN current value as `referenceMs` (the
-// session's startMs when parsing the Started field, its endMs when parsing
-// Ended) rather than the other end of the session. That matters for a
-// session that runs past midnight: started 23:50, still open past 01:30.
-// Typing "01:30" into Ended must resolve to the calendar day endMs already
-// carries (the day after the start), not back onto the start's day - which
-// is exactly what resolving against startMs instead would do, silently
-// moving a valid end time a full day earlier.
-function parseClock(text, referenceMs) {
-    let match = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(text);
-    if (!match)
-        return null;
-    let [, h, m] = match;
-    if (Number(h) > 23 || Number(m) > 59)
-        return null;
-    let ref = GLib.DateTime.new_from_unix_local(referenceMs / 1000);
-    return GLib.DateTime.new_local(
-        ref.get_year(), ref.get_month(), ref.get_day_of_month(),
-        Number(h), Number(m), 0).to_unix() * 1000;
 }
 
 // Decimal hours for anything being billed; h/m for anything being read.
@@ -170,6 +150,15 @@ export class TimesheetWindow {
                 sessions = JSON.parse(json);
             } catch (e) {
                 this._showError(`Could not reach the extension: ${e.message}`);
+                return;
+            }
+            // GetSessions() has no error reply today (unlike GetEvidence
+            // and UpdateSession), but guard anyway: an unexpected
+            // non-array JSON.parse() result (an {error} object, say, if
+            // that ever changes) must not reach sessions.map() below or
+            // _previousEndFor(), both of which assume an array.
+            if (!Array.isArray(sessions)) {
+                this._showError('Could not reach the extension: unexpected response.');
                 return;
             }
             // Kept for _previousEndFor(), which snaps a start time to the
