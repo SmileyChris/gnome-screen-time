@@ -79,6 +79,27 @@ function isValidField(key, value) {
     }
 }
 
+// Calendar-day arithmetic on dayKey strings (always YYYY-MM-DD - see
+// sessionsForDays()), used by update() to shift a session's dayKey rather
+// than re-derive it. Parsed and computed at midnight UTC rather than in
+// local time: this is pure date arithmetic with no time-of-day component to
+// preserve, and UTC has no DST transitions to land a candidate in a gap or
+// an overlap the way local-time arithmetic could.
+function daysBetweenDayKeys(fromKey, toKey) {
+    let [fy, fm, fd] = fromKey.split('-').map(Number);
+    let [ty, tm, td] = toKey.split('-').map(Number);
+    let from = GLib.DateTime.new_utc(fy, fm, fd, 0, 0, 0);
+    let to = GLib.DateTime.new_utc(ty, tm, td, 0, 0, 0);
+    return Math.round(to.difference(from) / GLib.TIME_SPAN_DAY);
+}
+
+function shiftDayKey(dayKey, deltaDays) {
+    if (deltaDays === 0)
+        return dayKey;
+    let [y, m, d] = dayKey.split('-').map(Number);
+    return GLib.DateTime.new_utc(y, m, d, 0, 0, 0).add_days(deltaDays).format('%Y-%m-%d');
+}
+
 // A record loaded from clock.json is the full shape start()/recover() write,
 // not the partial field set update() accepts. Booleans and exportedAt are
 // tolerated when absent and default below; everything else is required.
@@ -594,9 +615,41 @@ export class ClockStore {
         // the exact bug where a bad startMs got written, then the dayKey
         // re-stamp threw, leaving the session mutated in memory with
         // nothing to undo it.
-        let nextDayKey = allowed.startMs !== undefined
-            ? dateKey(GLib.DateTime.new_from_unix_local(next.startMs / 1000), this._dayStartHour())
-            : session.dayKey;
+        //
+        // Shifted, not re-derived from the current day-start-hour: the old
+        // and new startMs are each turned into what dateKey() would say
+        // under the CURRENT setting, and the stored dayKey moves by exactly
+        // the calendar-day difference between those two - never recomputed
+        // from scratch. A small edit that doesn't cross the current
+        // boundary shifts by zero days and keeps the stored key untouched,
+        // even if day-start-hour changed since this session was stamped (a
+        // session stamped under day-start-hour 0, after the setting moves
+        // to 4, keeps its key on a small start edit that a from-scratch
+        // re-derivation would have refiled under the new rule). Crossing
+        // the boundary shifts it by exactly one day, in either direction.
+        // Re-deriving from scratch was also the double-billing bug this
+        // guards against: moving an exported session's start back across
+        // midnight would change its day, so a re-export would create a row
+        // for the new day while the old day's row on the invoicing side
+        // still kept its hours - billed twice. See the exportedAt check
+        // just below.
+        let nextDayKey = session.dayKey;
+        if (allowed.startMs !== undefined) {
+            let dayStartHour = this._dayStartHour();
+            let oldDerivedKey = dateKey(
+                GLib.DateTime.new_from_unix_local(session.startMs / 1000), dayStartHour);
+            let newDerivedKey = dateKey(
+                GLib.DateTime.new_from_unix_local(next.startMs / 1000), dayStartHour);
+            nextDayKey = shiftDayKey(session.dayKey, daysBetweenDayKeys(oldDerivedKey, newDerivedKey));
+        }
+
+        // An exported session is money already on the invoicing side, keyed
+        // by `screen-time:{client}:{dayKey}` (see timeExport.js): moving it
+        // to a different day here would silently create a second row there
+        // on the next export, with nothing to zero out the first. Refused
+        // before anything is mutated, same as every check above.
+        if (session.exportedAt !== null && nextDayKey !== session.dayKey)
+            throw new Error('exported');
 
         Object.assign(session, allowed);
         session.dayKey = nextDayKey;

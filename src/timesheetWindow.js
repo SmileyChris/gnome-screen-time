@@ -61,6 +61,9 @@ function describeUpdateError(code) {
         return "The end time can't be before the start.";
     case 'reopen':
         return 'A closed session cannot be reopened from here.';
+    case 'exported':
+        return 'That session has been exported; moving it to another day would bill it twice. ' +
+            'Change it in the invoicing app first.';
     case 'invalid':
         return "That value isn't valid.";
     case 'missing':

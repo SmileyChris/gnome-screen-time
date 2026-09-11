@@ -1233,6 +1233,92 @@ test('ClockStore: update moving startMs across a day boundary re-derives dayKey 
     clock.destroy();
 });
 
+test('ClockStore: update with a same-day start edit keeps the stored dayKey', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let updated = clock.update(session.id, { startMs: t + 600000 });   // +10 minutes, same day
+    assertEqual(updated.dayKey, '2026-09-11');
+    clock.destroy();
+});
+
+test('ClockStore: update moving startMs backward across a day boundary shifts dayKey by one day', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 12, 0, 15);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let prevDay = at(2026, 9, 11, 23, 30);
+    let updated = clock.update(session.id, { startMs: prevDay });
+    assertEqual(updated.startMs, prevDay);
+    assertEqual(updated.dayKey, '2026-09-11');
+    clock.destroy();
+});
+
+test('ClockStore: a session stamped under day-start-hour 0 keeps its dayKey on a small edit after day-start-hour changes to 4', () => {
+    let settings = new FakeSettings({ 'day-start-hour': 0 });
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 2, 0);   // 2am; under day-start-hour 0, dayKey is '2026-09-11'
+    let session = clock.start('ACME', t);
+    assertEqual(session.dayKey, '2026-09-11');
+    clock.stop(t + 3600000);
+
+    settings.set_int('day-start-hour', 4);   // now 2am counts as the previous logical day
+    let updated = clock.update(session.id, { startMs: t + 300000 }); // +5 minutes, still before 4am
+    assertEqual(updated.dayKey, '2026-09-11',
+        'a from-scratch re-derivation under the new setting would wrongly move this to 2026-09-10');
+    clock.destroy();
+});
+
+// --- update() refuses to move an exported session to a different day ---
+
+test('ClockStore: update refuses a cross-midnight start edit on an exported session and leaves it unchanged', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 23, 30);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.markExported([session.id]);
+
+    let nextDay = at(2026, 9, 12, 0, 15);
+    let threw = null;
+    try {
+        clock.update(session.id, { startMs: nextDay });
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'exported');
+    let unchanged = clock.sessionById(session.id);
+    assertEqual(unchanged.startMs, t, 'left unchanged');
+    assertEqual(unchanged.dayKey, '2026-09-11', 'left unchanged');
+    clock.destroy();
+});
+
+test('ClockStore: update still allows a same-day start edit on an exported session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.markExported([session.id]);
+
+    let updated = clock.update(session.id, { startMs: t + 600000 });
+    assertEqual(updated.dayKey, '2026-09-11');
+    assertEqual(updated.startMs, t + 600000);
+    clock.destroy();
+});
+
+test('ClockStore: update still allows editing other fields (billedHours) on an exported session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.markExported([session.id]);
+
+    let updated = clock.update(session.id, { billedHours: 0.5 });
+    assertEqual(updated.billedHours, 0.5);
+    assertEqual(updated.dayKey, '2026-09-11');
+    clock.destroy();
+});
+
 // --- start() type validation ---
 
 test('ClockStore: start rejects an empty client', () => {
