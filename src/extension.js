@@ -138,17 +138,30 @@ export default class ScreenTimeExtension extends Extension {
             this._heartbeatId = GLib.timeout_add_seconds(
                 GLib.PRIORITY_DEFAULT, 30,
                 () => {
-                    this._clock.heartbeat();
-                    this._syncPanelClock();
-                    this._checkNudge();
-                    // heartbeat()'s own save doesn't fire clock.onChange (see
-                    // the onChange assignment below), so a save failure that
-                    // only ever happens during a heartbeat tick - nothing
-                    // else touching the clock in between - would otherwise
-                    // never reach syncSaveHealth() at all. This tick is the
-                    // backstop; the onChange-driven call below is the fast
-                    // path for anything that mutates the clock directly.
-                    this._notifier?.syncSaveHealth();
+                    // An unattended GLib timeout that throws has its source
+                    // silently dropped by GJS - the callback just never
+                    // runs again, with nothing in the journal to say why.
+                    // One bad tick would otherwise permanently stop the
+                    // heartbeat, and with it the panel clock, the idle
+                    // nudge and save-health monitoring, for the rest of
+                    // this Shell session. Always returns SOURCE_CONTINUE,
+                    // even when something inside throws.
+                    try {
+                        this._clock.heartbeat();
+                        this._syncPanelClock();
+                        this._checkNudge();
+                        // heartbeat()'s own save doesn't fire clock.onChange
+                        // (see the onChange assignment below), so a save
+                        // failure that only ever happens during a heartbeat
+                        // tick - nothing else touching the clock in between
+                        // - would otherwise never reach syncSaveHealth() at
+                        // all. This tick is the backstop; the onChange-
+                        // driven call below is the fast path for anything
+                        // that mutates the clock directly.
+                        this._notifier?.syncSaveHealth();
+                    } catch (e) {
+                        console.error(`[ScreenTime] heartbeat tick failed: ${e.message}`);
+                    }
                     return GLib.SOURCE_CONTINUE;
                 });
 
