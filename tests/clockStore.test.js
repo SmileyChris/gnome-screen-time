@@ -283,6 +283,109 @@ test('ClockStore: closeForShutdown marks a clean stop', () => {
     clock.destroy();
 });
 
+// --- release(): the disable()-time controlled pause, and recover(resumeId)
+// resuming what it paused ---
+
+test('ClockStore: release refreshes the running session\'s heartbeat, saves, and returns its id without closing it', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+
+    let id = clock.release(t + 45000);
+    assertEqual(id, session.id);
+
+    let reopened = new ClockStore(settings);
+    assertEqual(reopened.running !== null, true, 'still open on disk');
+    assertEqual(reopened.running.id, session.id);
+    assertEqual(reopened.running.lastSeenMs, t + 45000, 'the heartbeat refresh reached disk');
+    reopened.destroy();
+});
+
+test('ClockStore: release with nothing running saves nothing new and returns null', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let id = clock.release(at(2026, 9, 11, 9, 0));
+    assertEqual(id, null);
+
+    let reopened = new ClockStore(settings);
+    assertEqual(reopened.running, null);
+    reopened.destroy();
+});
+
+test('ClockStore: recover with a matching resumeId resumes that session regardless of the gap', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    let heldId = clock.release(t + 45000);
+
+    let reopened = new ClockStore(settings);
+    let twoHoursLater = t + 45000 + 2 * 3600000;
+    let interrupted = reopened.recover(twoHoursLater, { resumeId: heldId });
+    assertEqual(interrupted, null, 'nothing was interrupted - the held session was resumed');
+    assertEqual(reopened.running !== null, true, 'still running');
+    assertEqual(reopened.running.id, session.id);
+    assertEqual(reopened.running.interrupted, false);
+    assertEqual(reopened.running.lastSeenMs, twoHoursLater, 'heartbeat refreshed to the recover() instant');
+    reopened.destroy();
+});
+
+test('ClockStore: recover with no resumeId closes that same session at its lastSeenMs as interrupted', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.release(t + 45000);
+
+    let reopened = new ClockStore(settings);
+    let twoHoursLater = t + 45000 + 2 * 3600000;
+    let interrupted = reopened.recover(twoHoursLater);
+    assertEqual(reopened.running, null);
+    assertEqual(interrupted.endMs, t + 45000, 'closed at its last heartbeat, not at recover()\'s nowMs');
+    assertEqual(interrupted.interrupted, true);
+    reopened.destroy();
+});
+
+test('ClockStore: recover closes a stray second open session even when resumeId matches the other one', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2026, 9, 11, 9, 0);
+    // 'kept' is the one resumeId will name; 'stray' is fresher on paper (a
+    // more recent heartbeat) but must still be closed unconditionally, since
+    // at most one session can ever be resumed.
+    let kept = openSession('kept', 'ACME', t, t + 1000);
+    let stray = openSession('stray', 'BETA', t + 2000, t + 9000);
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: [kept, stray] })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    let nowMs = t + 60000;
+    let interrupted = clock.recover(nowMs, { resumeId: 'kept' });
+    assertEqual(interrupted.id, 'stray');
+    assertEqual(interrupted.interrupted, true);
+    assertEqual(interrupted.endMs, stray.lastSeenMs, 'closed at its own heartbeat, not resumed just because it was fresher');
+    assertEqual(clock.running.id, 'kept');
+    assertEqual(clock.running.interrupted, false);
+    assertEqual(clock.running.lastSeenMs, nowMs, 'the resumed session\'s heartbeat was refreshed');
+    clock.destroy();
+});
+
+test('ClockStore: recover with a resumeId that matches nothing open falls back to the ordinary gap rule', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    let interrupted = reopened.recover(t + 60000, { resumeId: 'does-not-exist' });
+    assertEqual(interrupted, null);
+    assert(reopened.running !== null, 'a 30s gap resumes it under the ordinary rule, resumeId or not');
+    reopened.destroy();
+});
+
 test('ClockStore: update accepts a billed value of zero', () => {
     let clock = freshClock();
     let t = at(2026, 9, 11, 9, 0);

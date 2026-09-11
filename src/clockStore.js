@@ -441,17 +441,32 @@ export class ClockStore {
         this._save();
     }
 
-    // Resolves sessions left open by a crash. On Wayland a Shell crash is a
-    // logout, so in practice the resume branch fires only for `make reload`
-    // and disable/enable cycles.
+    // Resolves sessions left open by a crash - or, when `resumeId` names one
+    // still running from the same Shell process (extension.js's
+    // module-scoped `heldSessionId`, set by release() below at the previous
+    // disable()), a session release() simply paused rather than closed. ES
+    // modules are cached for the life of the Shell, so that module-scoped
+    // variable survives a disable()/enable() cycle (a lock, an idle blank,
+    // a suspend) but dies with the Shell process itself - a crash, a real
+    // logout/login, `make reload` (a fresh dev UUID means fresh module
+    // state), a reboot - so resumeId is only ever non-null for the case it
+    // names.
     //
     // Only one clock can run at a time, so more than one open session is
     // corruption (a hand edit, an interrupted write, a bad update), not
-    // something that can legitimately keep accruing. The one with the
-    // freshest heartbeat is treated as the real one and gets the resume
-    // grace under RESUME_GAP_MS; every other open session is closed
-    // unconditionally at its own lastSeenMs, whatever its age.
-    recover(nowMs = Date.now()) {
+    // something that can legitimately keep accruing. At most one open
+    // session is ever resumed:
+    //  - if resumeId names one of them, that one is resumed unconditionally,
+    //    regardless of the gap - release() already refreshed its lastSeenMs
+    //    moments before disable() tore everything else down, so the elapsed
+    //    gap says nothing about whether the Shell actually restarted, only
+    //    about how long the extension was disabled (a lock, say);
+    //  - otherwise the one with the freshest heartbeat gets the resume grace
+    //    under RESUME_GAP_MS, exactly as before.
+    // Every other open session is closed unconditionally at its own
+    // lastSeenMs, whatever its age - the same "only one can ever resume"
+    // rule as before resumeId existed.
+    recover(nowMs = Date.now(), { resumeId = null } = {}) {
         // Runs once, at enable(). On a machine whose clock is wrong (the
         // same dead-CMOS-battery scenario start()/stop()/heartbeat() guard
         // against), nowMs - lastSeenMs is meaningless: it cannot tell a
@@ -466,29 +481,45 @@ export class ClockStore {
         if (open.length === 0)
             return null;
 
-        open.sort((a, b) => a.lastSeenMs - b.lastSeenMs);
-        let mostRecent = open.pop();
-
+        let resumed = resumeId !== null ? open.find(s => s.id === resumeId) ?? null : null;
         let interrupted = [];
-        for (let session of open) {
-            this._close(session, session.lastSeenMs);
-            session.interrupted = true;
-            interrupted.push(session);
+        let changed = false;
+
+        if (resumed) {
+            let others = open.filter(s => s !== resumed)
+                .sort((a, b) => a.lastSeenMs - b.lastSeenMs);
+            for (let session of others) {
+                this._close(session, session.lastSeenMs);
+                session.interrupted = true;
+                interrupted.push(session);
+            }
+            resumed.lastSeenMs = nowMs;
+            changed = true;
+        } else {
+            open.sort((a, b) => a.lastSeenMs - b.lastSeenMs);
+            let mostRecent = open.pop();
+
+            for (let session of open) {
+                this._close(session, session.lastSeenMs);
+                session.interrupted = true;
+                interrupted.push(session);
+            }
+
+            let withinGap = nowMs - mostRecent.lastSeenMs < RESUME_GAP_MS;
+            if (!withinGap) {
+                this._close(mostRecent, mostRecent.lastSeenMs);
+                mostRecent.interrupted = true;
+                interrupted.push(mostRecent);
+            }
+            changed = interrupted.length > 0;
         }
 
-        let resumed = nowMs - mostRecent.lastSeenMs < RESUME_GAP_MS;
-        if (!resumed) {
-            this._close(mostRecent, mostRecent.lastSeenMs);
-            mostRecent.interrupted = true;
-            interrupted.push(mostRecent);
-        }
-
-        if (interrupted.length === 0)
+        if (!changed)
             return null;
         this._changed();
         // interrupted is in ascending lastSeenMs order, so the last entry
         // is the most recently interrupted session.
-        return interrupted[interrupted.length - 1];
+        return interrupted.length > 0 ? interrupted[interrupted.length - 1] : null;
     }
 
     closeForShutdown(nowMs = Date.now()) {
@@ -676,13 +707,41 @@ export class ClockStore {
     }
 
     // Drops the store without closing the running session, which is what a
-    // crash looks like on disk. destroy() is the clean path.
+    // crash looks like on disk: no heartbeat refresh, nothing to say this
+    // was a controlled pause rather than the Shell disappearing mid-tick.
+    // Tests use this to simulate exactly that. release() below is the
+    // controlled-pause counterpart; destroy() is the real-shutdown path.
     destroySilently() {
         this._save();
         this._settings = null;
         this.onChange = null;
     }
 
+    // The disable() path once GNOME Shell disabling this extension on every
+    // lock, idle blank and suspend no longer means "the billing clock
+    // stopped": refreshes the running session's heartbeat to `nowMs` (so its
+    // lastSeenMs reflects the instant disable() actually ran, not whatever
+    // the last 30s heartbeat tick happened to catch), saves, and releases
+    // this store's resources exactly like destroySilently() - but honestly,
+    // since a heartbeat refresh did happen here. Returns the running
+    // session's id (or null), which extension.js stashes in its
+    // module-scoped `heldSessionId` so the next enable() in this same Shell
+    // process can hand it back to recover() as `resumeId` and pick this
+    // exact session back up regardless of how long the lock lasted.
+    release(nowMs = Date.now()) {
+        this.heartbeat(nowMs);
+        let id = this.running?.id ?? null;
+        this._settings = null;
+        this.onChange = null;
+        return id;
+    }
+
+    // A real end: closes the running session cleanly rather than leaving it
+    // for the next recover() to find. extension.js's disable() no longer
+    // calls this (see release() above) - it runs from the `global`
+    // 'shutdown' handler at a genuine session end, and tests use it as
+    // ordinary teardown when what happens to a still-running session
+    // doesn't matter to what's being tested.
     destroy(nowMs = Date.now()) {
         this.closeForShutdown(nowMs);
         this._save();
