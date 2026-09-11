@@ -168,6 +168,14 @@ export class ClockStore {
         // however much has since happened in memory. The clock still works
         // entirely in memory either way.
         this._readOnly = false;
+        // Whether the most recent _save() attempt (one that actually ran -
+        // see _save()'s own dirty/readOnly guards) failed. Unlike
+        // this._readOnly, which is permanent for this store's life once
+        // set, this can flip back to false: a transient failure (disk full,
+        // a permission change) can resolve itself, and the next successful
+        // save says so. Distinct from readOnly, which means "never even
+        // try again" - this means "the last attempt didn't land."
+        this._saveFailing = false;
         this._ensureDir();
         this._load();
     }
@@ -349,8 +357,10 @@ export class ClockStore {
                 null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
             );
             this._dirty = false;
+            this._saveFailing = false;
         } catch (e) {
             console.error(`[ScreenTime] clock save error: ${e.message}`);
+            this._saveFailing = true;
         }
     }
 
@@ -380,6 +390,17 @@ export class ClockStore {
     // reporting bare success and leaving that only in the journal.
     get readOnly() {
         return this._readOnly;
+    }
+
+    // True when the most recent _save() that actually ran (dirty, and not
+    // already readOnly) threw. A billing edit can otherwise sit unpersisted
+    // in memory while every D-Bus reply reports success, and after C1,
+    // anything held only in memory is lost the moment a real logout/
+    // shutdown closes this Shell process. Unlike readOnly, this can clear
+    // itself: a transient failure (disk full, a permission change) can
+    // resolve, and the very next successful save says so.
+    get saveFailing() {
+        return this._saveFailing;
     }
 
     start(client, nowMs = Date.now()) {

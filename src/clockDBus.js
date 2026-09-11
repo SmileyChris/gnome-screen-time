@@ -104,29 +104,44 @@ export class ClockDBus {
         return JSON.stringify(evidenceFor(session, this._intervals));
     }
 
+    // Whether the store's most recent save attempt actually reached disk -
+    // see ClockStore.readOnly/saveFailing. Every mutating reply below
+    // includes this as `saved`, so a caller that only checked `error` (a
+    // rejected call) can also tell a call that succeeded in memory but
+    // never reached clock.json - the D-Bus reply would otherwise report
+    // bare success with nothing to say the change is one restart away from
+    // being lost.
+    _saved() {
+        return !this._clock.readOnly && !this._clock.saveFailing;
+    }
+
     StartSession(client) {
         try {
-            return JSON.stringify(this._clock.start(client));
+            let session = this._clock.start(client);
+            return JSON.stringify({ ...session, saved: this._saved() });
         } catch (e) {
             return JSON.stringify({ error: e.message });
         }
     }
 
     StopSession() {
-        return JSON.stringify(this._clock.stop());
+        let session = this._clock.stop();
+        return JSON.stringify(session ? { ...session, saved: this._saved() } : null);
     }
 
     UpdateSession(sessionId, fields) {
         try {
             let updated = this._clock.update(sessionId, JSON.parse(fields));
-            return JSON.stringify(updated ?? { error: 'missing' });
+            if (!updated)
+                return JSON.stringify({ error: 'missing' });
+            return JSON.stringify({ ...updated, saved: this._saved() });
         } catch (e) {
             return JSON.stringify({ error: e.message });
         }
     }
 
     DeleteSession(sessionId) {
-        return JSON.stringify({ removed: this._clock.remove(sessionId) });
+        return JSON.stringify({ removed: this._clock.remove(sessionId), saved: this._saved() });
     }
 
     // fromDayKey/toDayKeyExclusive select whole calendar days (see
@@ -144,10 +159,11 @@ export class ClockDBus {
     // export.
     //
     // `recorded` in the result is false when the store could not persist
-    // the exportedAt stamps to disk (ClockStore.readOnly - see there): the
-    // export file itself was still written successfully, but a Shell
-    // restart would forget which sessions were just exported, so the
-    // window needs to say so rather than report plain success.
+    // the exportedAt stamps to disk (ClockStore.readOnly or saveFailing -
+    // see _saved() above and there): the export file itself was still
+    // written successfully, but a Shell restart would forget which
+    // sessions were just exported, so the window needs to say so rather
+    // than report plain success.
     ExportPeriod(fromDayKey, toDayKeyExclusive, path, format) {
         try {
             if (!DAY_KEY_RE.test(fromDayKey) || !DAY_KEY_RE.test(toDayKeyExclusive) ||
@@ -175,7 +191,7 @@ export class ClockDBus {
             // flag. The window mentions this when it's non-zero.
             let skippedUnknown = countSkippedUnknown(sessions, clients);
             return JSON.stringify({
-                rows: rows.length, recorded: !this._clock.readOnly, skippedUnknown,
+                rows: rows.length, recorded: this._saved(), skippedUnknown,
             });
         } catch (e) {
             return JSON.stringify({ error: e.message });

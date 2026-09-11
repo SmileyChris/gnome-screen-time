@@ -1431,6 +1431,48 @@ test('ClockStore: read-only mode also engages when a corrupt file cannot be back
     assertEqual(listBackupFiles().length, 0, 'the backup genuinely never got written');
 });
 
+// --- saveFailing: distinct from readOnly - a transient write failure that
+// can clear itself, rather than a permanent "never try again" ---
+
+test('ClockStore: a save into a non-writable directory sets saveFailing, and a later successful save clears it', () => {
+    let clock = freshClock();
+    assertEqual(clock.saveFailing, false, 'starts healthy');
+    assertEqual(clock.readOnly, false, 'not the same thing as read-only');
+
+    let t = at(2026, 9, 11, 9, 0);
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    // Read+execute only: replace_contents() needs to create a new file in
+    // the directory (its atomic-rename temp file), which this blocks,
+    // without touching whether the existing file can still be read.
+    GLib.chmod(dir, 0o555);
+    let session;
+    try {
+        session = clock.start('ACME', t);
+    } finally {
+        GLib.chmod(dir, 0o755);
+    }
+    assert(session !== null && session.client === 'ACME', 'the store still works in memory');
+    assertEqual(clock.saveFailing, true, 'the failed save is recorded');
+    assertEqual(clock.readOnly, false, 'a write failure is not the permanent read-only state');
+
+    clock.stop(t + 3600000);   // the directory is writable again now
+    assertEqual(clock.saveFailing, false, 'a later successful save clears it');
+    clock.destroy();
+});
+
+test('ClockStore: saveFailing stays false when nothing is dirty - no save was even attempted', () => {
+    let clock = freshClock();
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    GLib.chmod(dir, 0o555);
+    try {
+        clock.heartbeat(at(2026, 9, 11, 9, 0));   // nothing running: heartbeat() is a no-op
+    } finally {
+        GLib.chmod(dir, 0o755);
+    }
+    assertEqual(clock.saveFailing, false, 'no mutation was attempted, so nothing failed');
+    clock.destroy();
+});
+
 // --- a 0-byte clock.json is empty, not corrupt ---
 
 test('ClockStore: a 0-byte clock.json loads as empty, writes no backup, and later saves normally', () => {

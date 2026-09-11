@@ -451,6 +451,7 @@ export class TimesheetWindow {
                 // otherwise the next render would show what was typed
                 // instead of re-seeding from the session's new value.
                 draft[dirtyKey] = false;
+                this._toastIfUnsaved(result);
             } catch (e) {
                 this._toast(`Failed: ${e.message}`);
             }
@@ -682,8 +683,22 @@ export class TimesheetWindow {
                 if ('description' in fields)
                     draft.noteDirty = false;
             }
+            this._toastIfUnsaved(result);
         } catch (e) {
             this._toast(`Failed: ${e.message}`);
+        }
+    }
+
+    // Called after a mutating UpdateSessionSync reply that did NOT report
+    // an error: the edit landed in the store's memory, but result.saved is
+    // false when it didn't actually reach clock.json (ClockStore.readOnly
+    // or saveFailing - see clockDBus.js's _saved()). Silent otherwise -
+    // most edits show no toast at all today, and a healthy save must not
+    // start showing one.
+    _toastIfUnsaved(result) {
+        if (result.saved === false) {
+            this._toast("Saved here, but clock.json couldn't be written - it won't survive " +
+                'a restart. Check the Shell\'s logs.');
         }
     }
 

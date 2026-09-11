@@ -87,6 +87,10 @@ export default class ScreenTimeExtension extends Extension {
             let interrupted = this._clock.recover(nowMs, { resumeId });
             if (interrupted)
                 this._notifier.notifyInterrupted(interrupted);
+            // Catches a read-only clock.json discovered at construction
+            // (see ClockStore._load()) immediately, rather than leaving it
+            // to the first onChange or the first 30s heartbeat tick.
+            this._notifier.syncSaveHealth();
 
             // Surfaces whatever a lock/idle-blank/suspend cost while this
             // extension itself was disabled and could run no timer, no idle
@@ -137,6 +141,14 @@ export default class ScreenTimeExtension extends Extension {
                     this._clock.heartbeat();
                     this._syncPanelClock();
                     this._checkNudge();
+                    // heartbeat()'s own save doesn't fire clock.onChange (see
+                    // the onChange assignment below), so a save failure that
+                    // only ever happens during a heartbeat tick - nothing
+                    // else touching the clock in between - would otherwise
+                    // never reach syncSaveHealth() at all. This tick is the
+                    // backstop; the onChange-driven call below is the fast
+                    // path for anything that mutates the clock directly.
+                    this._notifier?.syncSaveHealth();
                     return GLib.SOURCE_CONTINUE;
                 });
 
@@ -147,7 +159,10 @@ export default class ScreenTimeExtension extends Extension {
 
             // Must be set before ClockDBus is constructed below - see the
             // comment there.
-            this._clock.onChange = () => this._syncPanelClock();
+            this._clock.onChange = () => {
+                this._syncPanelClock();
+                this._notifier?.syncSaveHealth();
+            };
             // 0 while not away; the instant UsageTracker first reported away,
             // otherwise. `_onPrepareForSleep(true)` calls `_setAway(true)` even
             // when the lock screen already made the tracker away, so onAway(true)

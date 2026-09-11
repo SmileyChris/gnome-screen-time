@@ -55,6 +55,12 @@ export class ClockNotifier {
         this._clock = clock;
         this._source = null;
         this._active = null;
+        // A second, independent resident notification from this._active
+        // (the idle/suspend/away nudges): save-health is a standing
+        // condition, not a moment-in-time prompt, and must not clobber - or
+        // be clobbered by - whichever nudge happens to be showing. See
+        // syncSaveHealth() below.
+        this._saveHealthNotice = null;
     }
 
     _ensureSource() {
@@ -67,6 +73,7 @@ export class ClockNotifier {
         this._source.connect('destroy', () => {
             this._source = null;
             this._active = null;
+            this._saveHealthNotice = null;
         });
         Main.messageTray.add(this._source);
         return this._source;
@@ -124,6 +131,53 @@ export class ClockNotifier {
     // already faded into the tray.
     _showFailure(title, body) {
         this._show(title, body, [['Dismiss', () => this._active?.destroy()]]);
+    }
+
+    // ClockStore._save() logs a failure and carries on, so a billing edit
+    // could sit unpersisted in memory with every caller reporting success
+    // and nothing but the journal to say otherwise - and after C1, anything
+    // held only in memory is lost the moment a real logout/shutdown closes
+    // this Shell process. Call this whenever the clock might have changed
+    // state (extension.js does so from clock.onChange and from the 30s
+    // heartbeat tick, since heartbeat()'s own save doesn't fire onChange).
+    //
+    // "Don't spam": a resident notice is created once, the moment either
+    // condition starts, and left alone - not re-shown, not re-acknowledged
+    // - while it continues; only its body text is refreshed in place if the
+    // reason changes (read-only vs. a save failure). It is destroyed the
+    // moment a later call finds everything healthy again. A user dismissal
+    // in between is respected until the state actually clears and returns.
+    syncSaveHealth() {
+        let reason = null;
+        if (this._clock?.readOnly)
+            reason = "clock.json couldn't be read, so changes are kept in memory only " +
+                "and won't survive a restart.";
+        else if (this._clock?.saveFailing)
+            reason = 'The last save to clock.json failed - see the logs for why.';
+
+        if (reason === null) {
+            this._saveHealthNotice?.destroy();
+            this._saveHealthNotice = null;
+            return;
+        }
+        if (this._saveHealthNotice) {
+            this._saveHealthNotice.body = reason;
+            return;
+        }
+        let source = this._ensureSource();
+        let notification = new MessageTray.Notification({
+            source,
+            title: "Clock changes aren't being saved",
+            body: reason,
+            urgency: MessageTray.Urgency.NORMAL,
+            resident: true,
+        });
+        notification.connect('destroy', () => {
+            if (this._saveHealthNotice === notification)
+                this._saveHealthNotice = null;
+        });
+        this._saveHealthNotice = notification;
+        source.addNotification(notification);
     }
 
     // `awaySeconds` is for display only; `awaySinceMs` is the tracker's own
@@ -297,6 +351,8 @@ export class ClockNotifier {
     destroy() {
         this._active?.destroy();
         this._active = null;
+        this._saveHealthNotice?.destroy();
+        this._saveHealthNotice = null;
         this._source?.destroy();
         this._source = null;
         this._clock = null;
