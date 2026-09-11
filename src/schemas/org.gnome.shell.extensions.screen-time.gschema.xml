@@ -63,5 +63,10 @@
       <summary>Most recently clocked client</summary>
       <description>Internal, not user-facing. What the popup's clock control and the keyboard shortcut start when no client is named.</description>
     </key>
+    <key name="toggle-clock" type="as">
+      <default><![CDATA[[]]]></default>
+      <summary>Toggle the clock</summary>
+      <description>Keyboard shortcut that stops the running clock, or starts the most recently used client. Unset by default, because many combinations are already claimed by the desktop.</description>
+    </key>
   </schema>
 </schemalist>

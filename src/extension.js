@@ -1,5 +1,8 @@
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { PanelIndicator } from './panelIndicator.js';
 import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
@@ -18,6 +21,16 @@ export default class ScreenTimeExtension extends Extension {
         this._store = new UsageStore(this._settings);
         this._clock = new ClockStore(this._settings);
         this._clock.recover();
+
+        // IGNORE_AUTOREPEAT so holding the keys cannot start and stop
+        // repeatedly; NORMAL | OVERVIEW so it works on the desktop and with
+        // Activities open.
+        Main.wm.addKeybinding(
+            'toggle-clock', this._settings,
+            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            () => this._toggleClock());
+
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
         this._popup = new PopupWidget(this._indicator.menu, this._store,
@@ -58,6 +71,20 @@ export default class ScreenTimeExtension extends Extension {
         console.log('[ScreenTime] timesheet window not implemented yet');
     }
 
+    // Stops if running; otherwise starts the last client used. With no
+    // clients configured there is nothing to start, so it does nothing.
+    _toggleClock() {
+        if (this._clock.running) {
+            this._clock.stop();
+        } else {
+            let last = this._settings.get_string('last-client');
+            if (last.length === 0)
+                return;
+            this._clock.start(last);
+        }
+        this._popup?.refresh();
+    }
+
     // The Shell refuses a second preferences dialog while one is showing, so
     // if the prefs process already has a window up, raise that instead.
     _openPrefs() {
@@ -94,6 +121,7 @@ export default class ScreenTimeExtension extends Extension {
         this._limitNotifier = null;
         this._intervals?.destroy();
         this._intervals = null;
+        Main.wm.removeKeybinding('toggle-clock');
         this._clock?.destroy();
         this._clock = null;
         this._store?.destroy();
