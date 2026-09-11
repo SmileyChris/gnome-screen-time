@@ -130,6 +130,14 @@ export class ClockStore {
         // recover() is what actually heals this state at startup, so this
         // only has to cover anomalies that arise mid-run.
         this._reportedAnomalies = new Set();
+        // Set for the rest of this store's life the moment _load() finds
+        // that it cannot guarantee the original file's bytes are preserved
+        // somewhere (an unreadable file, or a corrupt one it failed to back
+        // up). The invariant is absolute: if this store could not keep a
+        // copy of what was already on disk, it must never overwrite it,
+        // however much has since happened in memory. The clock still works
+        // entirely in memory either way.
+        this._readOnly = false;
         this._ensureDir();
         this._load();
     }
@@ -173,10 +181,32 @@ export class ClockStore {
         try {
             [, contents] = file.load_contents(null);
         } catch (e) {
-            // The bytes themselves could not be read (permissions, I/O
-            // error). There is nothing here to back up, but the file on
-            // disk is untouched, so nothing has been lost either.
-            console.error(`[ScreenTime] clock load error: ${e.message}`);
+            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
+                return;   // deleted between query_exists() and here: same as never existing
+            // Any other read failure (permissions, I/O error) means the
+            // original bytes are inaccessible here, not merely absent.
+            // This store must never write a fresh clock.json over a file
+            // it was never actually able to read - that would silently
+            // discard whatever billing history the file holds, with no
+            // trace and no chance to recover it. Read-only for the rest of
+            // this store's life, even once whatever caused this is fixed:
+            // the clock still works entirely in memory, it just never
+            // saves again.
+            this._readOnly = true;
+            console.error(`[ScreenTime] clock load error: ${e.message}; clock.json is ` +
+                'read-only for this session - changes will not be saved');
+            return;
+        }
+
+        if (contents.length === 0) {
+            // Genuinely empty: nothing was ever written here, so there is
+            // nothing to preserve and nothing has been lost. This is not
+            // corruption - no backup, no read-only mode, just an empty
+            // store. (Distinguishing this here also sidesteps
+            // replace_contents()'s own behaviour on empty content, which
+            // _backupCorruptFile() would otherwise have to special-case.)
+            console.error('[ScreenTime] clock load: clock.json is empty; starting with no sessions');
+            this._sessions = [];
             return;
         }
 
@@ -188,7 +218,18 @@ export class ClockStore {
             // would otherwise overwrite the file with nothing, discarding
             // the user's whole billing history with no trace. Back the raw
             // bytes up first, then start from empty.
-            let backupPath = this._backupCorruptFile(contents);
+            let { ok, path: backupPath } = this._backupCorruptFile(contents);
+            if (!ok) {
+                // The backup itself failed: the original bytes were never
+                // actually copied anywhere else, so this file must not be
+                // overwritten either - same invariant as the unreadable-
+                // file case above, just discovered one step later.
+                this._readOnly = true;
+                console.error('[ScreenTime] clock load: clock.json is malformed and could not be ' +
+                    'backed up; clock.json is read-only for this session - changes will not be saved');
+                this._sessions = [];
+                return;
+            }
             console.error('[ScreenTime] clock load: clock.json is malformed and could not ' +
                 `be read as a sessions array; original backed up to ${backupPath}`);
             this._sessions = [];
@@ -207,9 +248,16 @@ export class ClockStore {
         // excluded from memory, but the file it came from is preserved
         // byte-for-byte first - once per load, not once per record.
         if (invalidCount > 0) {
-            let backupPath = this._backupCorruptFile(contents);
-            console.error(`[ScreenTime] clock load: excluded ${invalidCount} invalid ` +
-                `session record(s); original backed up to ${backupPath}`);
+            let { ok, path: backupPath } = this._backupCorruptFile(contents);
+            if (!ok) {
+                this._readOnly = true;
+                console.error(`[ScreenTime] clock load: excluded ${invalidCount} invalid session ` +
+                    'record(s) but the original could not be backed up; clock.json is read-only ' +
+                    'for this session - changes will not be saved');
+            } else {
+                console.error(`[ScreenTime] clock load: excluded ${invalidCount} invalid ` +
+                    `session record(s); original backed up to ${backupPath}`);
+            }
         }
         this._sessions = valid;
     }
@@ -236,20 +284,33 @@ export class ClockStore {
 
     // Copies the as-loaded bytes verbatim, before anything is excluded, so a
     // corrupt file's only copy is never just the records this run managed to
-    // parse.
+    // parse. Returns { ok, path }: `ok` is false whenever the bytes were not
+    // actually preserved - a thrown error, or replace_contents() returning
+    // `false` without throwing at all (its documented behaviour is a bare
+    // GLib-level assertion failure on empty content, not a catchable error;
+    // _load() rules that case out before ever calling this, but the return
+    // value is still checked here rather than assumed). Callers must look at
+    // `ok`, not just the absence of an exception.
     _backupCorruptFile(contents) {
         let backupPath = `${CLOCK_FILE}.invalid-${Math.floor(Date.now() / 1000)}`;
+        let ok = false;
         try {
-            Gio.File.new_for_path(backupPath).replace_contents(
+            [ok] = Gio.File.new_for_path(backupPath).replace_contents(
                 contents, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
         } catch (e) {
             console.error(`[ScreenTime] clock backup error: ${e.message}`);
+            ok = false;
         }
-        return backupPath;
+        return { ok, path: backupPath };
     }
 
     _save() {
         if (!this._dirty)
+            return;
+        // The one loud console.error already happened in _load() the
+        // moment read-only mode began; every _save() it silently skips
+        // after that must not repeat it.
+        if (this._readOnly)
             return;
         try {
             let json = JSON.stringify({ sessions: this._sessions }, null, 2);
@@ -286,6 +347,12 @@ export class ClockStore {
         // so a rejected call never touches the store.
         if (!isValidField('client', client))
             throw new Error('invalid');
+        // A machine whose clock is wrong (a dead CMOS battery booting into
+        // 1970, say) can hand Date.now() itself a nonsensical value. This
+        // is a user-facing action, so the failure must be visible to the
+        // caller rather than silently clamped or ignored.
+        if (!isValidTimestamp(nowMs))
+            throw new Error('invalid');
 
         let current = this.running;
         if (current && current.client === client)
@@ -318,6 +385,10 @@ export class ClockStore {
     }
 
     stop(nowMs = Date.now()) {
+        // Same reasoning as start(): a user action, so a bad nowMs must
+        // throw rather than be silently absorbed or clamped.
+        if (!isValidTimestamp(nowMs))
+            throw new Error('invalid');
         let current = this.running;
         if (!current)
             return null;
@@ -336,6 +407,13 @@ export class ClockStore {
     heartbeat(nowMs = Date.now()) {
         let current = this.running;
         if (!current)
+            return;
+        // Runs on an unattended GLib timeout - it must never throw. A bad
+        // nowMs (the same wrong-clock scenario start()/stop() guard
+        // against) is skipped silently rather than written: the
+        // alternative is a garbage lastSeenMs poisoning the stray-session
+        // clamp in _sessionSeconds() later.
+        if (!isValidTimestamp(nowMs))
             return;
         current.lastSeenMs = nowMs;
         this._dirty = true;
@@ -386,7 +464,12 @@ export class ClockStore {
         let current = this.running;
         if (!current)
             return null;
-        this._close(current, nowMs);
+        // Runs from disable(), which must always complete - never throw
+        // here. A bad nowMs falls back to the session's own lastSeenMs,
+        // which is already known-valid: start() and heartbeat() only ever
+        // write a validated timestamp there.
+        let closeAt = isValidTimestamp(nowMs) ? nowMs : current.lastSeenMs;
+        this._close(current, closeAt);
         current.cleanStop = true;
         this._changed();
         return current;

@@ -985,3 +985,221 @@ test('ClockStore: sessionById finds a session by id regardless of its start time
     assertEqual(clock.sessionById('does-not-exist'), null);
     clock.destroy();
 });
+
+// --- read-only mode: never write a file whose original bytes weren't kept ---
+//
+// The invariant: if this store could not preserve a copy of what was
+// already on disk - an unreadable file, or a corrupt one it failed to back
+// up - it must never overwrite that file, no matter what happens in memory
+// afterward, for the rest of its life.
+
+test('ClockStore: an unreadable clock.json puts the store in read-only mode for its lifetime', () => {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    let t = at(2026, 9, 11, 9, 0);
+    let record = openSession('real-1', 'ACME', t, t + 3600000);
+    record.endMs = t + 3600000;
+    let raw = JSON.stringify({ sessions: [record] });
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(raw), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    GLib.chmod(CLOCK_FILE, 0o000);
+    let clock;
+    try {
+        clock = new ClockStore(new FakeSettings());
+        assertEqual(clock._readOnly, true, 'a read failure puts the store into read-only mode');
+        // The clock still works entirely in memory even though the file on
+        // disk could never be read.
+        let session = clock.start('BETA', t + 7200000);
+        assert(session !== null && session.client === 'BETA', 'the store still works in memory');
+    } finally {
+        GLib.chmod(CLOCK_FILE, 0o644);
+    }
+
+    // Even now that the file is readable again, this store stays read-only
+    // for the rest of its life: destroy()'s own save must not write over a
+    // file whose original bytes it never actually held.
+    clock.destroy();
+
+    let [, bytesAfter] = Gio.File.new_for_path(CLOCK_FILE).load_contents(null);
+    assertEqual(new TextDecoder().decode(bytesAfter), raw,
+        'the original file is untouched, byte-for-byte, even after start() and destroy()');
+    assertEqual(listBackupFiles().length, 0, 'a read failure has nothing in hand to back up');
+});
+
+test('ClockStore: read-only mode also engages when a corrupt file cannot be backed up', () => {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    let raw = '{ this is not json';
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(raw), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    // Read+execute only: the existing file is still readable, but nothing
+    // new (the backup) can be created in the directory.
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    GLib.chmod(dir, 0o555);
+    let clock;
+    try {
+        clock = new ClockStore(new FakeSettings());
+        assertEqual(clock._readOnly, true,
+            'a failed backup is the same invariant as an unreadable file, just discovered later');
+        assertEqual(clock._sessions, []);
+    } finally {
+        GLib.chmod(dir, 0o755);
+    }
+
+    clock.destroy();
+    let [, bytesAfter] = Gio.File.new_for_path(CLOCK_FILE).load_contents(null);
+    assertEqual(new TextDecoder().decode(bytesAfter), raw, 'the original is untouched');
+    assertEqual(listBackupFiles().length, 0, 'the backup genuinely never got written');
+});
+
+// --- a 0-byte clock.json is empty, not corrupt ---
+
+test('ClockStore: a 0-byte clock.json loads as empty, writes no backup, and later saves normally', () => {
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new Uint8Array(0), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    assertEqual(clock._sessions, [], 'an empty file has no sessions to load');
+    assertEqual(clock._readOnly, false,
+        'an empty file is not corruption - false claims aside, the store must still be able to save');
+    assertEqual(listBackupFiles().length, 0, 'nothing to back up for a file that never held anything');
+
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.destroySilently();
+
+    let reopened = new ClockStore(new FakeSettings());
+    assertEqual(reopened.running.id, session.id,
+        'the save after loading an empty file actually reached disk - this store is not read-only');
+    reopened.destroy();
+});
+
+// --- nowMs bounds on the methods that take it from a caller ---
+//
+// A machine whose clock is wrong (a dead CMOS battery booting into 1970, an
+// NTP sync gone bad) can hand these methods' own default (Date.now()) a
+// nonsensical value, not just a hostile caller. Each method is validated
+// according to what it can tolerate: start()/stop() are user actions and
+// must surface the failure; heartbeat() runs unattended and must never
+// throw; closeForShutdown() runs from disable(), which must always finish.
+
+test('ClockStore: start rejects an astronomically large nowMs, touching nothing', () => {
+    let clock = freshClock();
+    let threw = null;
+    try {
+        clock.start('ACME', 1e300);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running, null);
+    assertEqual(clock._sessions, []);
+    clock.destroy();
+});
+
+test('ClockStore: start rejects a NaN nowMs, touching nothing', () => {
+    let clock = freshClock();
+    let threw = null;
+    try {
+        clock.start('ACME', NaN);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running, null);
+    assertEqual(clock._sessions, []);
+    clock.destroy();
+});
+
+test('ClockStore: start with a bad nowMs while a session is running leaves it running, unchanged', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    let before = JSON.parse(JSON.stringify(session));
+    let threw = null;
+    try {
+        clock.start('BETA', 1e300);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running.id, session.id, 'still ACME, never switched');
+    assertEqual(session, before, 'the running session is completely unchanged');
+    clock.destroy();
+});
+
+test('ClockStore: stop rejects an astronomically large nowMs, leaving the session running', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    let before = JSON.parse(JSON.stringify(session));
+    let threw = null;
+    try {
+        clock.stop(1e300);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running.id, session.id, 'still running');
+    assertEqual(session, before, 'unchanged');
+    clock.destroy();
+});
+
+test('ClockStore: stop rejects a NaN nowMs, leaving the session running', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    let before = JSON.parse(JSON.stringify(session));
+    let threw = null;
+    try {
+        clock.stop(NaN);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.running.id, session.id);
+    assertEqual(session, before);
+    clock.destroy();
+});
+
+test('ClockStore: heartbeat silently skips an invalid nowMs, writing nothing', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);   // establish a known-good lastSeenMs first
+    clock.heartbeat(1e300);
+    assertEqual(clock.running.lastSeenMs, t + 30000, 'the bad heartbeat left lastSeenMs untouched');
+    clock.heartbeat(NaN);
+    assertEqual(clock.running.lastSeenMs, t + 30000, 'same for NaN');
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    assertEqual(reopened.running.lastSeenMs, t + 30000, 'nothing bad ever reached disk either');
+    reopened.destroy();
+});
+
+test("ClockStore: closeForShutdown falls back to the session's own lastSeenMs for an astronomical nowMs", () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);
+    let closed = clock.closeForShutdown(1e300);
+    assertEqual(closed.endMs, t + 30000, 'closed at its own last heartbeat, not the bad nowMs');
+    assertEqual(closed.lastSeenMs, t + 30000);
+    assertEqual(closed.cleanStop, true);
+    clock.destroy();
+});
+
+test("ClockStore: closeForShutdown falls back to the session's own lastSeenMs for a NaN nowMs", () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    let closed = clock.closeForShutdown(NaN);
+    assertEqual(closed.endMs, t, 'no heartbeat happened, so lastSeenMs is still the start time');
+    clock.destroy();
+});
