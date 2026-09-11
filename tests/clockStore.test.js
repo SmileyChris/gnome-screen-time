@@ -377,6 +377,131 @@ test('ClockStore: sessionsInRange returns anything intersecting the range', () =
     clock.destroy();
 });
 
+// --- sessionsForDays: a billing period is a set of calendar days ---
+
+test('ClockStore: sessionsForDays selects by dayKey, not by overlapping span, across a month boundary', () => {
+    let clock = freshClock();
+    let augSession = clock.start('ACME', at(2026, 8, 31, 23, 0));
+    clock.stop(at(2026, 9, 1, 2, 0));   // ends in September, but files under the 31st
+    assertEqual(augSession.dayKey, '2026-08-31');
+
+    let sepSession = clock.start('BETA', at(2026, 9, 1, 9, 0));
+    clock.stop(at(2026, 9, 1, 10, 0));
+
+    let august = clock.sessionsForDays('2026-08-01', '2026-09-01');
+    assertEqual(august.map(s => s.id), [augSession.id],
+        'the session that started on the 31st stays in August even though its span reaches into September');
+
+    let september = clock.sessionsForDays('2026-09-01', '2026-10-01');
+    assertEqual(september.map(s => s.id), [sepSession.id],
+        'span overlap would have also pulled the August-started session in here; dayKey selection does not');
+
+    clock.destroy();
+});
+
+test('ClockStore: sessionsForDays is from-inclusive, to-exclusive, oldest first', () => {
+    let clock = freshClock();
+    let a = clock.start('ACME', at(2026, 9, 5, 9, 0));
+    clock.stop(at(2026, 9, 5, 10, 0));
+    let b = clock.start('BETA', at(2026, 9, 6, 9, 0));
+    clock.stop(at(2026, 9, 6, 10, 0));
+    clock.start('ACME', at(2026, 9, 7, 9, 0));   // outside the range below
+    clock.stop(at(2026, 9, 7, 10, 0));
+
+    let result = clock.sessionsForDays('2026-09-05', '2026-09-07');
+    assertEqual(result.map(s => s.id), [a.id, b.id], 'the 5th and 6th, not the 7th; oldest first');
+    clock.destroy();
+});
+
+// --- markExported ---
+//
+// The only writer of exportedAt: update()'s allowlist deliberately excludes
+// it (see UPDATABLE_FIELDS), since exposing it there would let any D-Bus
+// caller mark a session exported. One save and one onChange for a whole
+// batch, so exporting a month does not fire a change event per session.
+
+test('ClockStore: markExported stamps the given closed sessions', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let a = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let b = clock.start('BETA', t + 3600000);
+    clock.stop(t + 7200000);
+
+    let stampMs = t + 8000000;
+    let count = clock.markExported([a.id, b.id], stampMs);
+    assertEqual(count, 2);
+    assertEqual(clock.sessionById(a.id).exportedAt, stampMs);
+    assertEqual(clock.sessionById(b.id).exportedAt, stampMs);
+    clock.destroy();
+});
+
+test('ClockStore: markExported skips a running session and an unknown id', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let closed = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let running = clock.start('BETA', t + 3600000);
+
+    let stampMs = t + 8000000;
+    let count = clock.markExported([closed.id, running.id, 'does-not-exist'], stampMs);
+    assertEqual(count, 1, 'only the closed session was stamped');
+    assertEqual(clock.sessionById(closed.id).exportedAt, stampMs);
+    assertEqual(clock.sessionById(running.id).exportedAt, null, 'a running session is never stamped');
+    clock.destroy();
+});
+
+test('ClockStore: markExported fires onChange once for many ids', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let ids = [];
+    let cursor = t;
+    for (let i = 0; i < 5; i++) {
+        let session = clock.start(`C${i}`, cursor);
+        cursor += 3600000;
+        clock.stop(cursor);
+        ids.push(session.id);
+    }
+    let fired = 0;
+    clock.onChange = () => { fired++; };
+    let count = clock.markExported(ids, cursor + 1000);
+    assertEqual(count, 5);
+    assertEqual(fired, 1, 'one save/notification for the whole batch, not one per session');
+    clock.destroy();
+});
+
+test('ClockStore: markExported throws on an invalid stamp and changes nothing', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let fired = 0;
+    clock.onChange = () => { fired++; };
+
+    let threw = null;
+    try {
+        clock.markExported([session.id], NaN);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'invalid');
+    assertEqual(clock.sessionById(session.id).exportedAt, null, 'nothing was stamped');
+    assertEqual(fired, 0, 'no save or notification either');
+    clock.destroy();
+});
+
+test('ClockStore: markExported with nothing matching stamps nothing and fires no onChange', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);   // still running: cannot match anyway
+    let fired = 0;
+    clock.onChange = () => { fired++; };
+    let count = clock.markExported(['does-not-exist'], t + 1000);
+    assertEqual(count, 0);
+    assertEqual(fired, 0, 'nothing changed, so no save or notification');
+    clock.destroy();
+});
+
 // Not from the brief: covers the "every other open session is closed
 // unconditionally" requirement for recover() (task instructions, not the
 // brief's single-session sample code). Only one clock can run at a time, so

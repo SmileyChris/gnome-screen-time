@@ -70,6 +70,16 @@ function describeUpdateError(code) {
     }
 }
 
+// ExportPeriod's own validation failure is the one bare code it can return
+// (day keys the window itself computed should never trip it); anything else
+// in its `error` field already came from Gio.File as a filesystem message
+// (e.g. "Permission denied") and reads fine as a sentence on its own.
+function describeExportError(code) {
+    if (code === 'invalid')
+        return "That period isn't valid.";
+    return code;
+}
+
 export class TimesheetWindow {
     constructor(app) {
         // The session bus itself can be unreachable (not just the Clock
@@ -94,8 +104,10 @@ export class TimesheetWindow {
         });
 
         this._page = new Adw.PreferencesPage();
+        let header = new Adw.HeaderBar();
+        header.pack_end(this._exportButton());
         let toolbar = new Adw.ToolbarView({ content: this._page });
-        toolbar.add_top_bar(new Adw.HeaderBar());
+        toolbar.add_top_bar(header);
         // Every rejection path in this window reports through a toast, so the
         // overlay belongs to the window rather than to a later feature.
         this._toasts = new Adw.ToastOverlay({ child: toolbar });
@@ -119,6 +131,76 @@ export class TimesheetWindow {
         }
         this._proxy.connectSignal('ClockChanged', () => this.refresh());
         this.refresh();
+    }
+
+    // A menu button rather than a bare "Export…" button: the invoicing
+    // app's draft period defaults to last month, but a mid-month check
+    // against what's on the clock so far needs this month too.
+    _exportButton() {
+        let button = new Gtk.MenuButton({ label: 'Export…' });
+        let box = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL, spacing: 2,
+            margin_top: 6, margin_bottom: 6, margin_start: 6, margin_end: 6,
+        });
+        let popover = new Gtk.Popover({ child: box });
+        for (let [label, monthOffset] of [['Last month', -1], ['This month', 0]]) {
+            let item = new Gtk.Button({ label, css_classes: ['flat'] });
+            item.connect('clicked', () => {
+                popover.popdown();
+                this._export(monthOffset);
+            });
+            box.append(item);
+        }
+        button.set_popover(popover);
+        return button;
+    }
+
+    // monthOffset is relative to the calendar month containing "now": -1 is
+    // last month (the default, matching the invoicing app's draft period),
+    // 0 is this month, so a mid-month check against what's on the clock so
+    // far is possible. Both day keys are computed from local calendar
+    // dates, per ClockStore.sessionsForDays()/ExportPeriod's dayKey
+    // selection, not from a millisecond span.
+    _export(monthOffset) {
+        // The export button stays visible even when the session bus proxy
+        // failed to construct (the window still shows an error in place of
+        // the session list in that case) - guard here rather than let a
+        // null-proxy TypeError surface as the toast's text.
+        if (!this._proxy) {
+            this._toast('Could not reach the extension.');
+            return;
+        }
+        let now = GLib.DateTime.new_now_local();
+        let firstOfThisMonth = GLib.DateTime.new_local(now.get_year(), now.get_month(), 1, 0, 0, 0);
+        let from = firstOfThisMonth.add_months(monthOffset);
+        let toExclusive = from.add_months(1);
+        let fromDayKey = from.format('%Y-%m-%d');
+        let toDayKeyExclusive = toExclusive.format('%Y-%m-%d');
+
+        let dialog = new Gtk.FileDialog({
+            title: 'Export time entries',
+            initial_name: `time-${from.format('%Y-%m')}.json`,
+        });
+        dialog.save(this.window, null, (source, result) => {
+            let file;
+            try {
+                file = source.save_finish(result);
+            } catch (e) {
+                return;   // cancelled
+            }
+            let path = file.get_path();
+            let format = path.endsWith('.csv') ? 'csv' : 'json';
+            try {
+                let [json] = this._proxy.ExportPeriodSync(
+                    fromDayKey, toDayKeyExclusive, path, format);
+                let result2 = JSON.parse(json);
+                this._toast(result2.error
+                    ? `Export failed: ${describeExportError(result2.error)}`
+                    : `Exported ${result2.rows} row(s) to ${path}`);
+            } catch (e) {
+                this._toast(`Export failed: ${e.message}`);
+            }
+        });
     }
 
     // Everything the Shell holds for the last 30 days. The Shell is the only

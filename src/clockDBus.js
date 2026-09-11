@@ -1,8 +1,12 @@
 import Gio from 'gi://Gio';
 import { evidenceFor } from './evidence.js';
 import { readClients } from './clients.js';
+import { mergeSessions, toJSON, toCSV } from './timeExport.js';
 
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime/Clock';
+
+// ExportPeriod's day keys arrive as plain strings from another process.
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Payloads cross as JSON rather than as nested variants: the shapes here grow
 // with the feature, and a hand-maintained D-Bus signature on both sides of a
@@ -40,6 +44,13 @@ export const INTERFACE_XML = `
     </method>
     <method name="DeleteSession">
       <arg type="s" direction="in" name="sessionId"/>
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="ExportPeriod">
+      <arg type="s" direction="in" name="fromDayKey"/>
+      <arg type="s" direction="in" name="toDayKeyExclusive"/>
+      <arg type="s" direction="in" name="path"/>
+      <arg type="s" direction="in" name="format"/>
       <arg type="s" direction="out" name="json"/>
     </method>
     <signal name="ClockChanged"/>
@@ -116,6 +127,41 @@ export class ClockDBus {
 
     DeleteSession(sessionId) {
         return JSON.stringify({ removed: this._clock.remove(sessionId) });
+    }
+
+    // fromDayKey/toDayKeyExclusive select whole calendar days (see
+    // ClockStore.sessionsForDays()), not an overlapping time span, so a
+    // session that starts late on the last day of a month never spills into
+    // the next month's export. Both come from another process - the window
+    // computes them from local calendar dates, but nothing stops a hand-
+    // crafted call - so they are validated here before being trusted as
+    // strings for comparison.
+    //
+    // Re-emits the whole period every time. Identity is a row's
+    // external_id, so a corrected session updates its row on the receiving
+    // side rather than adding a second one; exportedAt is only a display
+    // hint in the Timesheet and never filters anything out of a later
+    // export.
+    ExportPeriod(fromDayKey, toDayKeyExclusive, path, format) {
+        try {
+            if (!DAY_KEY_RE.test(fromDayKey) || !DAY_KEY_RE.test(toDayKeyExclusive) ||
+                !(fromDayKey < toDayKeyExclusive))
+                return JSON.stringify({ error: 'invalid' });
+
+            let sessions = this._clock.sessionsForDays(fromDayKey, toDayKeyExclusive);
+            let rows = mergeSessions(sessions, readClients(this._settings));
+            let text = format === 'csv' ? toCSV(rows) : toJSON(rows);
+            Gio.File.new_for_path(path).replace_contents(
+                new TextEncoder().encode(text),
+                null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+            // markExported() itself skips any still-running session, so the
+            // whole id list can be passed through without filtering here.
+            this._clock.markExported(sessions.map(s => s.id));
+            return JSON.stringify({ rows: rows.length });
+        } catch (e) {
+            return JSON.stringify({ error: e.message });
+        }
     }
 
     destroy() {

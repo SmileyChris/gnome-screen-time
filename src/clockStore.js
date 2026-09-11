@@ -582,6 +582,32 @@ export class ClockStore {
         return true;
     }
 
+    // Stamps closed sessions as exported in one save and one onChange, so an
+    // export of a month does not fire a change event per session. Unlike
+    // update(), exportedAt is not on any external allowlist - this is the
+    // only way to write it, which keeps it out of reach of a D-Bus caller
+    // that only ever sends UpdateSession's documented fields. Unknown ids
+    // and still-open sessions are skipped rather than rejected: a caller
+    // exporting a period built its id list from sessionsForDays() a moment
+    // earlier, and either could already be stale (a session removed, or
+    // still running) by the time this runs.
+    markExported(ids, stampMs = Date.now()) {
+        if (!isValidTimestamp(stampMs))
+            throw new Error('invalid');
+
+        let wanted = new Set(ids);
+        let stamped = 0;
+        for (let session of this._sessions) {
+            if (!wanted.has(session.id) || session.endMs === null)
+                continue;
+            session.exportedAt = stampMs;
+            stamped++;
+        }
+        if (stamped > 0)
+            this._changed();
+        return stamped;
+    }
+
     // Unlike sessionsInRange(), not bounded by "now" - a session started in
     // the future (however that came about) must still be findable by id.
     sessionById(id) {
@@ -591,6 +617,20 @@ export class ClockStore {
     sessionsInRange(fromMs, toMs, nowMs = Date.now()) {
         return this._sessions
             .filter(s => s.startMs < toMs && (s.endMs ?? nowMs) > fromMs)
+            .sort((a, b) => a.startMs - b.startMs);
+    }
+
+    // A billing period is a set of calendar days, not a time span: a session
+    // starting at 23:00 on the 31st files under the 31st (dayKey is stamped
+    // once, at creation - see start()), and must stay there even though its
+    // wall-clock span pokes into the next month. Selecting by dayKey rather
+    // than by overlapping [fromMs, toMs) is what keeps it out of next
+    // month's export. Plain string comparison, since dayKey is always
+    // YYYY-MM-DD: that format sorts the same lexicographically as
+    // chronologically.
+    sessionsForDays(fromDayKey, toDayKeyExclusive) {
+        return this._sessions
+            .filter(s => s.dayKey >= fromDayKey && s.dayKey < toDayKeyExclusive)
             .sort((a, b) => a.startMs - b.startMs);
     }
 
