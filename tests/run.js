@@ -20,6 +20,7 @@ const FILES = [
     './usageStore.test.js',
     './intervalLog.test.js',
     './clockStore.test.js',
+    './clients.test.js',
     './activitySources.test.js',
     './browserSource.test.js',
     './rules.test.js',

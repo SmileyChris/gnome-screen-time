@@ -1,11 +1,17 @@
-// Just enough of Gio.Settings for UsageStore: integer reads, and
-// `changed::<key>` signals that a test can fire by hand.
+import GLib from 'gi://GLib';
+
+// Just enough of Gio.Settings for UsageStore: integer reads,
+// `changed::<key>` signals that a test can fire by hand, and the
+// variant-typed keys clients.js reads and writes (`clients`, a(sbb), and
+// `last-client`, s).
 export class FakeSettings {
     constructor(ints = {}) {
         this._ints = {
             'retention-days': 90, 'max-interval': 300, 'day-start-hour': 0,
             'interval-retention-days': 30, ...ints,
         };
+        this._values = { clients: new GLib.Variant('a(sbb)', []) };
+        this._strings = { 'last-client': '' };
         this._handlers = new Map();
         this._nextId = 1;
     }
@@ -16,6 +22,26 @@ export class FakeSettings {
 
     set_int(key, value) {
         this._ints[key] = value;
+        this.emit(`changed::${key}`);
+    }
+
+    // GSettings variant-typed keys. clients.js reads and writes `clients`
+    // (a(sbb)) and `last-client` (s) this way.
+    get_value(key) {
+        return this._values[key];
+    }
+
+    set_value(key, variant) {
+        this._values[key] = variant;
+        this.emit(`changed::${key}`);
+    }
+
+    get_string(key) {
+        return this._strings[key] ?? '';
+    }
+
+    set_string(key, value) {
+        this._strings[key] = value;
         this.emit(`changed::${key}`);
     }
 

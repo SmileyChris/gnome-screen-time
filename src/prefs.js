@@ -7,6 +7,7 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
+import { readClients, writeClients } from './clients.js';
 
 const HISTORY_DAYS = 7;
 const CHART_HEIGHT = 110;
@@ -185,6 +186,8 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         this._addCompanionsGroup(page, window);
 
         this._addLimitsGroup(page, settings, data);
+
+        this._addClientsGroup(page, settings);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
         page.add(retentionGroup);
@@ -452,5 +455,72 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         addRow.add_suffix(minutesSpin);
         addRow.add_suffix(addButton);
         limitsGroup.add(addRow);
+    }
+
+    // The client list is the only place clients get created: the popup
+    // cannot take text input sanely. Non-billable clients (personal work,
+    // this extension itself) stay listed and trackable; the Billable switch
+    // only controls whether export later includes them.
+    _addClientsGroup(page, settings) {
+        const clientsGroup = new Adw.PreferencesGroup({
+            title: 'Clients',
+            description: 'Who the clock can bill time to. Non-billable clients are tracked but left out of exports.',
+        });
+        page.add(clientsGroup);
+
+        const clientRows = [];
+
+        const renderClients = () => {
+            for (let row of clientRows.splice(0))
+                clientsGroup.remove(row);
+            let list = readClients(settings);
+            list.forEach((client, i) => {
+                let row = new Adw.ActionRow({ title: client.name });
+
+                let billable = new Gtk.Switch({
+                    active: client.billable, valign: Gtk.Align.CENTER,
+                    tooltip_text: 'Billable',
+                });
+                billable.connect('notify::active', () => {
+                    let next = readClients(settings);
+                    next[i].billable = billable.active;
+                    writeClients(settings, next);
+                });
+                row.add_suffix(billable);
+
+                let remove = new Gtk.Button({
+                    icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER,
+                    css_classes: ['flat'],
+                });
+                remove.connect('clicked', () => {
+                    let next = readClients(settings);
+                    next.splice(i, 1);
+                    writeClients(settings, next);
+                    renderClients();
+                });
+                row.add_suffix(remove);
+
+                clientsGroup.add(row);
+                clientRows.push(row);
+            });
+
+            let addRow = new Adw.EntryRow({ title: 'Add a client' });
+            addRow.connect('entry-activated', () => {
+                let name = addRow.text.trim();
+                if (name.length === 0)
+                    return;
+                let next = readClients(settings);
+                if (next.some(c => c.name === name))
+                    return;
+                next.push({ name, active: true, billable: true });
+                writeClients(settings, next);
+                addRow.text = '';
+                renderClients();
+            });
+            clientsGroup.add(addRow);
+            clientRows.push(addRow);
+        };
+
+        renderClients();
     }
 }
