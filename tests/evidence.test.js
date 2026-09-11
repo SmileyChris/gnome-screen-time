@@ -106,3 +106,30 @@ test('evidenceFor: a fully covered session with fractional clips never dips nega
     assertEqual(ev.unattributedSeconds, 0, 'clamped rather than negative');
     log.destroy();
 });
+
+test('evidenceFor: firstActivityMs is the first clipped interval start', () => {
+    let log = freshLog();
+    let t = at(2026, 9, 11, 9, 0);
+    log.record(t + 900000, t + 1200000, ['kgx'], ['Console']);
+    log.flushAll();
+    let ev = evidenceFor(session(t, t + 1800000), log);
+    assertEqual(ev.firstActivityMs, t + 900000, 'clocked in 15 minutes early');
+    log.destroy();
+});
+
+test('evidenceFor: firstActivityMs is clipped to the session start', () => {
+    let log = freshLog();
+    let t = at(2026, 9, 11, 9, 0);
+    log.record(t - 600000, t + 600000, ['kgx'], ['Console']);
+    log.flushAll();
+    let ev = evidenceFor(session(t, t + 1800000), log);
+    assertEqual(ev.firstActivityMs, t, 'never earlier than the session itself');
+    log.destroy();
+});
+
+test('evidenceFor: firstActivityMs is null with no activity', () => {
+    let log = freshLog();
+    let t = at(2026, 9, 11, 9, 0);
+    assertEqual(evidenceFor(session(t, t + 1800000), log).firstActivityMs, null);
+    log.destroy();
+});

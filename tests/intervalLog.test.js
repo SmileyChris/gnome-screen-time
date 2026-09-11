@@ -167,7 +167,7 @@ test('IntervalLog: query returns nothing for a range with no overlap', () => {
     let base = at(2026, 9, 11, 10);
     log.record(base, base + 30000, ['a'], ['A']);
     log.flushAll();
-    assertEqual(log.query(base + 60000, base + 90000), { seconds: 0, entries: [] });
+    assertEqual(log.query(base + 60000, base + 90000), { seconds: 0, entries: [], firstMs: null });
     log.destroy();
 });
 

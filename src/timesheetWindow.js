@@ -33,6 +33,30 @@ function clockOf(ms) {
     return GLib.DateTime.new_from_unix_local(ms / 1000).format('%H:%M');
 }
 
+// "HH:MM" on the same calendar day as `referenceMs`. Returns null if the text
+// is not a time, so the caller can say so rather than writing a NaN.
+//
+// Callers always pass the field's OWN current value as `referenceMs` (the
+// session's startMs when parsing the Started field, its endMs when parsing
+// Ended) rather than the other end of the session. That matters for a
+// session that runs past midnight: started 23:50, still open past 01:30.
+// Typing "01:30" into Ended must resolve to the calendar day endMs already
+// carries (the day after the start), not back onto the start's day - which
+// is exactly what resolving against startMs instead would do, silently
+// moving a valid end time a full day earlier.
+function parseClock(text, referenceMs) {
+    let match = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(text);
+    if (!match)
+        return null;
+    let [, h, m] = match;
+    if (Number(h) > 23 || Number(m) > 59)
+        return null;
+    let ref = GLib.DateTime.new_from_unix_local(referenceMs / 1000);
+    return GLib.DateTime.new_local(
+        ref.get_year(), ref.get_month(), ref.get_day_of_month(),
+        Number(h), Number(m), 0).to_unix() * 1000;
+}
+
 // Decimal hours for anything being billed; h/m for anything being read.
 // Rounds to whole minutes first, then derives hours and minutes from that
 // total - rounding each of h and m independently let 3599s print as "60m"
@@ -148,6 +172,11 @@ export class TimesheetWindow {
                 this._showError(`Could not reach the extension: ${e.message}`);
                 return;
             }
+            // Kept for _previousEndFor(), which snaps a start time to the
+            // end of the session before it - possibly on an earlier day,
+            // so it needs the whole fetched window, not just one day's
+            // group.
+            this._sessions = sessions;
 
             // Drop state for sessions that fell out of the 30-day window or
             // were deleted, so this never grows without bound and a stale
@@ -266,8 +295,112 @@ export class TimesheetWindow {
             row.add_row(unattributed);
         }
 
-        for (let adjustRow of this._adjustRows(session, evidence))
+        // One draft per session backs the Started/Ended fields below and
+        // the Note/Bill fields in _adjustRows, so all five widgets agree on
+        // what the user has and hasn't touched yet.
+        let draft = this._draftFor(session, evidence);
+
+        row.add_row(this._timeRow(session, evidence, draft, 'start'));
+        if (session.endMs !== null)
+            row.add_row(this._timeRow(session, evidence, draft, 'end'));
+
+        for (let adjustRow of this._adjustRows(session, evidence, draft))
             row.add_row(adjustRow);
+    }
+
+    // Epoch ms -> "HH:MM" and back, resolved against the session's own day so
+    // typing 09:15 cannot silently move the session to today.
+    //
+    // Backed by `draft` (see _draftFor) rather than the session directly:
+    // text the user has typed but not yet applied (no Enter pressed yet)
+    // must survive a refresh the same way the Note field's unsaved text
+    // does, since ClockChanged - now also fired by the periodic heartbeat -
+    // can rebuild this row at any time.
+    _timeRow(session, evidence, draft, which) {
+        let draftKey = which === 'start' ? 'start' : 'end';
+        let dirtyKey = which === 'start' ? 'startDirty' : 'endDirty';
+        let current = which === 'start' ? session.startMs : session.endMs;
+
+        let row = new Adw.EntryRow({
+            title: which === 'start' ? 'Started' : 'Ended',
+        });
+        // Seeded from the draft, then the dirty-tracking handler is
+        // connected - same ordering as _adjustRows's Note/Bill fields, so
+        // seeding this text never itself marks the field dirty.
+        row.text = draft[draftKey];
+        row.connect('notify::text', () => {
+            draft[draftKey] = row.text;
+            draft[dirtyKey] = true;
+        });
+
+        let apply = ms => {
+            let fields = which === 'start' ? { startMs: ms } : { endMs: ms };
+            try {
+                let [json] = this._proxy.UpdateSessionSync(
+                    session.id, JSON.stringify(fields));
+                let result = JSON.parse(json);
+                if (result.error) {
+                    this._toast(describeUpdateError(result.error));
+                    return;
+                }
+                // Applied: the server's copy is now the truth and the
+                // ClockChanged this triggers will rebuild this row, so the
+                // draft must stop pinning the text that was just sent -
+                // otherwise the next render would show what was typed
+                // instead of re-seeding from the session's new value.
+                draft[dirtyKey] = false;
+            } catch (e) {
+                this._toast(`Failed: ${e.message}`);
+            }
+        };
+
+        row.connect('apply', () => {
+            let ms = parseClock(row.text, current ?? session.startMs);
+            if (ms === null) {
+                this._toast('Enter a time as HH:MM.');
+                return;
+            }
+            apply(ms);
+        });
+
+        if (which === 'start') {
+            let firstActivity = evidence.firstActivityMs ?? null;
+            if (firstActivity !== null && firstActivity > session.startMs) {
+                let snap = new Gtk.Button({
+                    label: `Snap to ${clockOf(firstActivity)}`,
+                    css_classes: ['flat'],
+                    valign: Gtk.Align.CENTER,
+                    tooltip_text: 'Move the start to the first activity recorded in this session.',
+                });
+                snap.connect('clicked', () => apply(firstActivity));
+                row.add_suffix(snap);
+            }
+            let previousEnd = this._previousEndFor(session);
+            if (previousEnd !== null && previousEnd !== session.startMs) {
+                let butt = new Gtk.Button({
+                    label: `Snap to ${clockOf(previousEnd)}`,
+                    css_classes: ['flat'],
+                    valign: Gtk.Align.CENTER,
+                    tooltip_text: 'Start where the previous session ended.',
+                });
+                butt.connect('clicked', () => apply(previousEnd));
+                row.add_suffix(butt);
+            }
+        }
+        return row;
+    }
+
+    // The end of the latest session that finished at or before this one
+    // started, which is what "I forgot to switch" should snap to.
+    _previousEndFor(session) {
+        let best = null;
+        for (let other of this._sessions ?? []) {
+            if (other.id === session.id || other.endMs === null)
+                continue;
+            if (other.endMs <= session.startMs && (best === null || other.endMs > best))
+                best = other.endMs;
+        }
+        return best;
     }
 
     // One line per app, with its activities nested below it.
@@ -290,25 +423,54 @@ export class TimesheetWindow {
         return branch;
     }
 
-    // Returns the Bill row and the Note row together, so the caller adds
-    // both without either method reaching into the other's state.
+    // Gets or creates the draft for `session` (this._drafts, keyed by
+    // session id) and re-seeds every field the user has NOT touched from
+    // the session's current data, before returning it.
     //
-    // Both widgets are backed by a draft owned by the window (this._drafts),
-    // not by the widgets themselves: refresh() rebuilds this row from
-    // scratch on every ClockChanged, which now fires on every Save and
-    // "Use actual" anywhere in the window, so anything typed or bumped but
-    // not yet saved must survive that rebuild rather than being seeded back
-    // to the server's last-saved values.
-    _adjustRows(session, evidence) {
+    // A draft is created empty on a row's first expansion and would
+    // otherwise keep whatever it was first seeded with forever: refresh()
+    // rebuilds this row from scratch on every ClockChanged - which now
+    // fires on every Save, "Use actual", and a periodic heartbeat tick
+    // anywhere in the window - and an untouched field must track the
+    // session, not freeze at its first-render value. Left unfixed, this
+    // mis-bills a running session: expand it at 1.0 h, leave the row open
+    // while the clock runs to 2.0 h, press +1/4, and a frozen draft sends
+    // 1.25 instead of 2.25. A field the user HAS edited (its dirty flag is
+    // true) is left alone - that's an in-progress edit, not something to
+    // overwrite - and clearing dirty on a successful save is exactly what
+    // hands the field back to being re-seeded here.
+    _draftFor(session, evidence) {
         let seededNote = session.description.length > 0
             ? session.description
             : evidence.entries.slice(0, 2).map(e => e.displayName).join('; ');
         let draft = this._drafts.get(session.id);
         if (!draft) {
-            draft = { note: seededNote, hours: hoursOf(session), noteDirty: false, hoursDirty: false };
+            draft = {
+                note: '', hours: 0, noteDirty: false, hoursDirty: false,
+                start: '', startDirty: false, end: '', endDirty: false,
+            };
             this._drafts.set(session.id, draft);
         }
+        if (!draft.noteDirty)
+            draft.note = seededNote;
+        if (!draft.hoursDirty)
+            draft.hours = hoursOf(session);
+        if (!draft.startDirty)
+            draft.start = clockOf(session.startMs);
+        if (!draft.endDirty)
+            draft.end = session.endMs === null ? '' : clockOf(session.endMs);
+        return draft;
+    }
 
+    // Returns the Bill row and the Note row together, so the caller adds
+    // both without either method reaching into the other's state.
+    //
+    // Both widgets are backed by `draft` (see _draftFor), not by the
+    // widgets themselves: refresh() rebuilds this row from scratch on every
+    // ClockChanged, so anything typed or bumped but not yet saved must
+    // survive that rebuild rather than being seeded back to the server's
+    // last-saved values.
+    _adjustRows(session, evidence, draft) {
         let noteRow = new Adw.EntryRow({ title: 'Note' });
         // Seeded from the top activities, never auto-filled onto an
         // invoice: those strings are repository names, hostnames and
@@ -393,10 +555,16 @@ export class TimesheetWindow {
 
     // Shared by Save and "Use actual": both send a partial fields payload
     // and report a rejection through a toast. A successful update fires
-    // ClockChanged, which rebuilds this row from the server's copy, so the
-    // local draft - now stale - is cleared here rather than left to
-    // silently reappear as unsaved on the next refresh. A rejected or
-    // failed call leaves the draft in place so nothing typed is lost.
+    // ClockChanged, which rebuilds this row from the server's copy, so only
+    // the dirty flag(s) for the field(s) this call actually wrote are
+    // cleared here - that hands them back to _draftFor to re-seed from the
+    // session on the rebuild. Fields this call did NOT touch (an
+    // un-applied Started/Ended edit sitting in the row while only Save's
+    // Note/Bill fields were sent, say) are left dirty, with their draft
+    // text untouched: deleting the whole draft here, as before adding
+    // Started/Ended, would otherwise discard that unrelated unsaved edit -
+    // exactly what _drafts exists to prevent. A rejected or failed call
+    // leaves every flag as it was, so nothing typed is lost.
     _updateSession(session, fields) {
         try {
             let [json] = this._proxy.UpdateSessionSync(session.id, JSON.stringify(fields));
@@ -405,7 +573,13 @@ export class TimesheetWindow {
                 this._toast(describeUpdateError(result.error));
                 return;
             }
-            this._drafts.delete(session.id);
+            let draft = this._drafts.get(session.id);
+            if (draft) {
+                if ('billedHours' in fields)
+                    draft.hoursDirty = false;
+                if ('description' in fields)
+                    draft.noteDirty = false;
+            }
         } catch (e) {
             this._toast(`Failed: ${e.message}`);
         }

@@ -173,6 +173,13 @@ export class IntervalLog {
     // into the same tree shape UsageStore.getUsageForDate returns.
     query(fromMs, toMs) {
         let root = {};
+        // The earliest clipped interval start seen, in original (unrounded)
+        // ms - "the first thing that was actually on screen in range",
+        // which is what a "clocked in late" retro-fix snaps a start to.
+        // Tracked alongside `root` rather than derived from it afterwards:
+        // the tree only keeps totals per app/activity, not per-interval
+        // start times.
+        let firstMs = null;
         for (let key of this._keysInRange(fromMs, toMs)) {
             for (let row of this._readDay(key)) {
                 let rec = decodeLine(row);
@@ -180,12 +187,17 @@ export class IntervalLog {
                 let e = Math.min(rec.e, toMs);
                 if (e <= s)
                     continue;
+                if (firstMs === null || s < firstMs)
+                    firstMs = s;
                 let secs = (e - s) / 1000;
                 this._credit(root, rec, secs);
             }
         }
         // Clipping produces fractional seconds; round bottom-up so a parent
-        // still reads as the sum of what is under it.
+        // still reads as the sum of what is under it. `seconds` below is
+        // that rounded total, taken as-is - NOT Math.round()'d again here,
+        // which would break the parent-equals-sum-of-children invariant
+        // roundNodes() maintains.
         let roundedTotal = roundNodes(root);
         let entries = Object.entries(root)
             .map(([appId, node]) => ({
@@ -195,7 +207,7 @@ export class IntervalLog {
                 children: node.children ?? null,
             }))
             .sort((a, b) => b.seconds - a.seconds);
-        return { seconds: roundedTotal, entries };
+        return { seconds: roundedTotal, entries, firstMs };
     }
 
     _credit(root, rec, secs) {
