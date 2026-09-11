@@ -128,10 +128,11 @@ export class IntervalLog {
 
     // Appends `count` records from the front of the buffer, grouped by day
     // file so a run of records costs one append per file, not one per record.
-    // The batch is only removed from the buffer once every day's append has
-    // succeeded: a disk error must not lose records that exist nowhere else,
-    // so a failed write leaves the whole batch buffered to retry on the next
-    // flush.
+    // Success is tracked per day key, not per batch: a day whose append
+    // succeeds is durable and must not be retried, or a later failure on a
+    // different day in the same batch would re-append it and duplicate it on
+    // disk. Only records belonging to a day that failed go back in the
+    // buffer, to retry on the next flush.
     _writeOut(count) {
         if (count <= 0)
             return;
@@ -141,7 +142,7 @@ export class IntervalLog {
             let key = this._keyFor(rec.s);
             byDay.set(key, (byDay.get(key) ?? '') + encodeLine(rec));
         }
-        let ok = true;
+        let failed = new Set();
         for (let [key, text] of byDay) {
             try {
                 let stream = this._fileFor(key).append_to(
@@ -149,19 +150,23 @@ export class IntervalLog {
                 stream.write_all(new TextEncoder().encode(text), null);
                 stream.close(null);
             } catch (e) {
+                failed.add(key);
                 console.error(`[ScreenTime] interval append failed: ${e.message}`);
-                ok = false;
             }
         }
-        if (!ok) {
-            if (this._buf.length > MAX_BUFFERED) {
-                let drop = this._buf.length - MAX_BUFFERED;
-                this._buf.splice(0, drop);
-                console.error(`[ScreenTime] interval buffer over cap, dropped ${drop} oldest records`);
-            }
-            return;
+        // Retained records (failed days only) are a filtered subset of
+        // `batch`, which is the front of `_buf` in original order, so they
+        // stay older than everything in `_buf.slice(count)`; prepending them
+        // keeps the buffer chronological.
+        let retained = failed.size === 0
+            ? []
+            : batch.filter(rec => failed.has(this._keyFor(rec.s)));
+        this._buf = retained.concat(this._buf.slice(count));
+        if (this._buf.length > MAX_BUFFERED) {
+            let drop = this._buf.length - MAX_BUFFERED;
+            this._buf.splice(0, drop);
+            console.error(`[ScreenTime] interval buffer over cap, dropped ${drop} oldest records`);
         }
-        this._buf.splice(0, count);
     }
 
     // Every stored record overlapping [fromMs, toMs], clipped to it, folded

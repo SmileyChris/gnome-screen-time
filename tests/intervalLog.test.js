@@ -277,6 +277,54 @@ test('IntervalLog: rounding keeps a parent equal to the sum of its children on f
     log.destroy();
 });
 
+test('IntervalLog: rounding combines a parent\'s own time with its rounded children correctly', () => {
+    let log = freshLog();
+    let base = at(2026, 9, 11, 10);
+    // Own (app-level) time plus two child records, back to back.
+    log.record(base, base + 1000, ['kgx'], ['Console']);
+    log.record(base + 1000, base + 2000, ['kgx', 'a1'], ['Console', 'A1']);
+    log.record(base + 2000, base + 3000, ['kgx', 'a2'], ['Console', 'A2']);
+    log.flushAll();
+    // A window not aligned to whole seconds: own clips to 0.5s, a1 stays a
+    // full 1s, a2 clips to 0.5s.
+    let { seconds, entries } = log.query(base + 500, base + 2500);
+    let kgx = entries.find(e => e.appId === 'kgx');
+    let children = sortedChildren(kgx.children);
+    let childSum = children.reduce((sum, c) => sum + c.seconds, 0);
+    // Correct (bottom-up, raw child sum taken before recursing): own's raw
+    // 0.5s rounds to 1 and adds to the rounded children (1 + 1 = 2), giving
+    // 3. A reorder that recurses first and then sums the CHILDREN'S ALREADY
+    // ROUNDED values to subtract from the parent's raw total would compute
+    // own = max(0, 2.0 - 2) = 0, giving 2 instead — own's rounded time
+    // would be silently swallowed by its children's rounding.
+    assertEqual(kgx.seconds, 3, "own's rounded 0.5s is not swallowed by its children's rounding");
+    assertEqual(kgx.seconds, childSum + Math.round(0.5),
+        'parent equals its rounded children plus its own rounded remainder');
+    assertEqual(seconds, entries.reduce((sum, e) => sum + e.seconds, 0),
+        'the reported total equals the sum of the top-level entries');
+    log.destroy();
+});
+
+test('IntervalLog: a same-batch failure on one day does not duplicate a day that already wrote', () => {
+    let log = freshLog();
+    let before = at(2026, 9, 11, 23, 50);
+    let after = at(2026, 9, 12, 0, 10);
+    let blockedPath = GLib.build_filenamev([INTERVAL_DIR, '2026-09-12.ndjson']);
+    // Block only the second day's file, so day 1's append can succeed while
+    // day 2's throws in the same _writeOut() call.
+    Gio.File.new_for_path(blockedPath).make_directory_with_parents(null);
+    log.record(before, before + 30000, ['a'], ['A']);
+    log.record(after, after + 30000, ['b'], ['B']);
+    log.flushAll();
+    assertEqual(dayFileLines('2026-09-11').length, 1, 'day 1 landed on the first flush');
+    Gio.File.new_for_path(blockedPath).delete(null);
+    log.flushAll();
+    assertEqual(dayFileLines('2026-09-11').length, 1,
+        'day 1 is not re-appended just because day 2 failed alongside it');
+    assertEqual(dayFileLines('2026-09-12').length, 1);
+    log.destroy();
+});
+
 test('IntervalLog: a failed append keeps the batch buffered for retry', () => {
     let log = freshLog();
     let base = at(2026, 9, 11, 10);
