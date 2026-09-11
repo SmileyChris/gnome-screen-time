@@ -29,7 +29,7 @@ export default class ScreenTimeExtension extends Extension {
         // Built before recover() runs, so a session left open by a crash
         // can actually be reported - nobody opens the Timesheet unprompted,
         // so "surfaced for review" would otherwise never be seen.
-        this._notifier = new ClockNotifier(this._clock, this._settings);
+        this._notifier = new ClockNotifier(this._clock);
         let interrupted = this._clock.recover();
         if (interrupted)
             this._notifier.notifyInterrupted(interrupted);

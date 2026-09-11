@@ -42,10 +42,17 @@ import { formatTime } from './formatTime.js';
 //    so a *non*-resident notification auto-destroys itself after any action
 //    fires; `resident: true` (used below) opts out so the Stop/Trim/Dismiss
 //    handlers control destruction themselves.
+//  - messageTray.js:458-465 (`Notification.clearActions`): removes every
+//    action, emitting `action-removed` for each; messageList.js:695-697
+//    connects a displayed notification's `action-added`/`action-removed` to
+//    messageList.js:739-767's `_addAction`/`_removeAction`, which add or
+//    destroy the actual button. So `clearActions()` + `addAction()` on an
+//    already-shown, still-open notification redraws its button row live -
+//    this is what `_show()`'s update path uses below to keep the buttons in
+//    sync with whichever text is currently showing.
 export class ClockNotifier {
-    constructor(clock, settings) {
+    constructor(clock) {
         this._clock = clock;
-        this._settings = settings;
         this._source = null;
         this._active = null;
     }
@@ -65,11 +72,24 @@ export class ClockNotifier {
         return this._source;
     }
 
+    // Every call installs exactly the actions for the text it is showing -
+    // both the create path and the update path always run the same
+    // addAction loop, never leaving a previous call's buttons (and the
+    // session/timestamps their closures captured) behind under new text.
     _show(title, body, actions) {
         let source = this._ensureSource();
         if (this._active) {
             this._active.title = title;
             this._active.body = body;
+            // clearActions() + addAction() (see the class comment for the
+            // exact source lines) redraws the live button row rather than
+            // leaving stale buttons - and stale closures - under new text:
+            // without this, a nudge left on screen across a second idle
+            // spell (or a different notice arriving while one is still up)
+            // would keep acting on the first spell's session/timestamps.
+            this._active.clearActions();
+            for (let [label, fn] of actions)
+                this._active.addAction(label, fn);
             // Flips true -> false, which is what actually re-requests the
             // banner (see the class comment above) rather than just
             // updating a notification already sitting in the tray.
@@ -96,6 +116,16 @@ export class ClockNotifier {
         return this._clock?.running?.id === session.id;
     }
 
+    // A button whose action didn't actually happen must not just vanish the
+    // way a successful one does - that reads as success. Goes through
+    // _show() (with a single Dismiss action) so the stale buttons are
+    // replaced rather than left under a now-wrong message, and so the
+    // explanation pops back up as a banner even if the original nudge had
+    // already faded into the tray.
+    _showFailure(title, body) {
+        this._show(title, body, [['Dismiss', () => this._active?.destroy()]]);
+    }
+
     // `awaySeconds` is for display only; `awaySinceMs` is the tracker's own
     // `_awaySince` instant and is what Stop actually closes the session at -
     // billing "now" would charge every minute of the very idle spell this
@@ -111,7 +141,10 @@ export class ClockNotifier {
             [
                 [`Stop at ${at}`, () => {
                     if (!this._isStillRunning(session)) {
-                        this._active?.destroy();
+                        console.debug('[ScreenTime] idle nudge: Stop clicked after the ' +
+                            'clock already moved on; nothing to do');
+                        this._showFailure(`${session.client}'s clock has moved on`,
+                            "That session isn't running any more - nothing to stop here.");
                         return;
                     }
                     try {
@@ -119,6 +152,9 @@ export class ClockNotifier {
                     } catch (e) {
                         console.error(`[ScreenTime] idle nudge: could not stop the clock ` +
                             `at ${at}: ${e.message}`);
+                        this._showFailure(`Couldn't stop the clock for ${session.client}`,
+                            "Couldn't stop the clock automatically - stop it from the panel.");
+                        return;
                     }
                     this._active?.destroy();
                 }],
@@ -139,25 +175,32 @@ export class ClockNotifier {
             [
                 ['Trim sleep', () => {
                     if (!this._isStillRunning(session)) {
-                        this._active?.destroy();
+                        console.debug('[ScreenTime] resume nudge: Trim sleep clicked after ' +
+                            'the clock already moved on; nothing to do');
+                        this._showFailure(`${session.client}'s clock has moved on`,
+                            "That session isn't running any more - nothing to trim here.");
                         return;
                     }
                     let client = session.client;
-                    let closed = false;
                     try {
                         this._clock.update(session.id, { endMs: sleptAtMs });
-                        closed = true;
                     } catch (e) {
                         console.error('[ScreenTime] resume nudge: could not trim sleep ' +
                             `from the clock: ${e.message}`);
+                        this._showFailure(`Couldn't trim sleep for ${client}`,
+                            'Couldn\'t trim sleep from the clock automatically - stop it ' +
+                            'from the panel.');
+                        return;
                     }
-                    if (closed) {
-                        try {
-                            this._clock.start(client, wokeAtMs);
-                        } catch (e) {
-                            console.error('[ScreenTime] resume nudge: sleep was trimmed but ' +
-                                `the clock could not be restarted for ${client}: ${e.message}`);
-                        }
+                    try {
+                        this._clock.start(client, wokeAtMs);
+                    } catch (e) {
+                        console.error('[ScreenTime] resume nudge: sleep was trimmed but ' +
+                            `the clock could not be restarted for ${client}: ${e.message}`);
+                        this._showFailure(`${client}'s clock wasn't restarted`,
+                            'The sleep was trimmed, but the clock could not be restarted ' +
+                            'automatically - start it again from the panel.');
+                        return;
                     }
                     this._active?.destroy();
                 }],
@@ -179,6 +222,5 @@ export class ClockNotifier {
         this._source?.destroy();
         this._source = null;
         this._clock = null;
-        this._settings = null;
     }
 }
