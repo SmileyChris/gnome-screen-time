@@ -27,10 +27,26 @@ build: schemas
 # Install to the local GNOME Shell extensions directory. Copying the whole of
 # src/ means a new module never has to be registered anywhere. If it is in
 # src/, it ships.
+#
+# Replaces the installed copy by rename, never by overwriting files in place.
+# A running Shell memory-maps the compiled schema, so `cp` over it changes the
+# bytes under that mapping and the next settings lookup fails in a way GLib
+# treats as fatal: this aborted a live session on 2026-09-11. A rename leaves
+# the old inode intact for anything still holding it. The staging copy sits on
+# the same filesystem as the extensions directory but outside it, so GNOME
+# never scans a half-built copy.
 install: build
-	@mkdir -p $(EXTENSION_DIR)
-	@cp -r $(SRC_DIR)/* $(EXTENSION_DIR)/
-	@echo "Installed to $(EXTENSION_DIR)"
+	@set -e; \
+	ext='$(EXTENSION_DIR)'; \
+	root=$$(dirname "$$(dirname "$$ext")"); \
+	stage="$$root/.$(UUID).staging"; old="$$root/.$(UUID).old"; \
+	rm -rf "$$stage" "$$old"; \
+	mkdir -p "$$(dirname "$$ext")"; \
+	cp -r $(SRC_DIR) "$$stage"; \
+	if [ -e "$$ext" ]; then mv "$$ext" "$$old"; fi; \
+	mv "$$stage" "$$ext"; \
+	rm -rf "$$old"; \
+	echo "Installed to $$ext"
 	@# A dev copy from `make reload` would otherwise stay enabled across
 	@# logins with production switched off; installing means we are done.
 	@if [ -f $(DEV_UUID_FILE) ]; then $(MAKE) --no-print-directory unreload; fi
@@ -135,9 +151,11 @@ check:
 	if [ $$fail -eq 0 ]; then echo "check: clean"; else exit 1; fi
 
 # Unit tests for the pure modules. run.js redirects XDG_DATA_HOME to a scratch
-# directory itself, so this never touches the real usage.json.
+# directory itself, so this never touches the real usage.json. install.sh
+# exercises `make install` itself, entirely inside its own scratch directory.
 test:
 	@gjs -m tests/run.js
+	@tests/install.sh
 
 lint:
 	@if command -v eslint >/dev/null 2>&1; then \
