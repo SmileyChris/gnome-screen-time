@@ -9,7 +9,7 @@ import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
-import { migratePanelSetting } from './panelMode.js';
+import { migratePanelSetting, panelClockState } from './panelMode.js';
 import { IntervalLog } from './intervalLog.js';
 import { LimitNotifier } from './limitNotifier.js';
 import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
@@ -140,14 +140,16 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator.setMode(this._settings.get_string('panel-time'));
     }
 
+    // this._clock.onChange can still fire after this._indicator is gone -
+    // see the comment in disable() on why that assignment is cleared there,
+    // but guard here too, matching every other disable()-ordering hazard in
+    // this file.
     _syncPanelClock() {
-        let running = this._clock.running;
-        this._indicator.setClock({
-            running: running !== null,
-            away: this._tracker?.away ?? false,
-            client: running?.client ?? '',
-            seconds: this._clock.billedSecondsForDay(todayKeyFor(this._settings)),
-        });
+        if (!this._indicator)
+            return;
+        this._indicator.setClock(panelClockState(
+            this._clock, todayKeyFor(this._settings), Date.now(),
+            this._tracker?.away ?? false));
     }
 
     disable() {
@@ -162,6 +164,19 @@ export default class ScreenTimeExtension extends Extension {
         this._dbus = null;
         this._clockDbus?.destroy();
         this._clockDbus = null;
+        // ClockDBus.destroy() just restored clock.onChange to the
+        // _syncPanelClock closure enable() put there (it chains through
+        // whatever handler it finds at construction and restores exactly
+        // that on destroy). Everything that closure reaches - indicator,
+        // tracker, settings - is about to be torn down below, so clear it
+        // now: otherwise this._clock.destroy() below fires onChange one
+        // last time into a half-destroyed extension (this._indicator is
+        // already null by then), which throws and aborts both the rest of
+        // ClockStore.destroy() and the rest of disable() - leaking
+        // UsageStore's autosave timer and settings handlers on every
+        // logout/reload while a client is clocked in.
+        if (this._clock)
+            this._clock.onChange = null;
         this._popup?.destroy();
         this._popup = null;
         this._indicator?.destroy();

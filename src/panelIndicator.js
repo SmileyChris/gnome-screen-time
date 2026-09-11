@@ -1,6 +1,7 @@
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
+import Pango from 'gi://Pango';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { panelLabelText } from './panelMode.js';
@@ -30,8 +31,13 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._label = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
-            style: 'padding-left: 4px;',
+            // 160px comfortably fits "client" mode's common case - a short
+            // client name plus an elapsed time, e.g. "Anderson & Co 3h45m"
+            // - without letting an unusually long client name push every
+            // other panel item along with it; anything longer ellipsizes.
+            style: 'padding-left: 4px; max-width: 160px;',
         });
+        this._label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         hbox.add_child(this._label);
         this.add_child(hbox);
 
