@@ -9,6 +9,7 @@ import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
 import { readClients, writeClients } from './clients.js';
 import { ShortcutRow } from './shortcutRow.js';
+import { migratePanelSetting } from './panelMode.js';
 
 const HISTORY_DAYS = 7;
 const CHART_HEIGHT = 110;
@@ -111,6 +112,16 @@ function buildHistogram(days) {
 export default class ScreenTimePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
+        // extension.js's enable() runs this too, but preferences is its own
+        // process and can be opened whether or not the extension is
+        // currently enabled - gnome-extensions prefs, or the gear icon
+        // before the Shell has ever loaded this version's enable() this
+        // session. Run here too, before the combo below reads panel-time,
+        // so a choice made here is never overwritten by a later enable()
+        // still migrating the old show-total-in-panel boolean for the
+        // first time (migratePanelSetting() is a one-time, idempotent
+        // no-op past its first successful run either way).
+        migratePanelSetting(settings);
         const data = loadUsageData();
 
         const page = new Adw.PreferencesPage();
