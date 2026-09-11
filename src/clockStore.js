@@ -349,6 +349,18 @@ export class ClockStore {
         return this._sessions.find(s => s.endMs === null) ?? null;
     }
 
+    // True once _load() found it could not guarantee the original
+    // clock.json's bytes were preserved (see the invariant documented on
+    // this._readOnly above): every mutation below still updates memory, but
+    // _changed()/_save() silently stop reaching disk. Exposed so a caller
+    // that just wrote something derived from this store elsewhere (an
+    // export file, say) can tell whether the in-memory change it also made
+    // here - markExported(), for one - actually got recorded, rather than
+    // reporting bare success and leaving that only in the journal.
+    get readOnly() {
+        return this._readOnly;
+    }
+
     start(client, nowMs = Date.now()) {
         // Same rule update() applies to `client`: reached over D-Bus as
         // StartSession(client), so this can be anything JSON can carry,

@@ -1,7 +1,7 @@
 import Gio from 'gi://Gio';
 import { evidenceFor } from './evidence.js';
 import { readClients } from './clients.js';
-import { mergeSessions, toJSON, toCSV } from './timeExport.js';
+import { mergeSessions, selectExportable, toJSON, toCSV } from './timeExport.js';
 
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime/Clock';
 
@@ -142,6 +142,12 @@ export class ClockDBus {
     // side rather than adding a second one; exportedAt is only a display
     // hint in the Timesheet and never filters anything out of a later
     // export.
+    //
+    // `recorded` in the result is false when the store could not persist
+    // the exportedAt stamps to disk (ClockStore.readOnly - see there): the
+    // export file itself was still written successfully, but a Shell
+    // restart would forget which sessions were just exported, so the
+    // window needs to say so rather than report plain success.
     ExportPeriod(fromDayKey, toDayKeyExclusive, path, format) {
         try {
             if (!DAY_KEY_RE.test(fromDayKey) || !DAY_KEY_RE.test(toDayKeyExclusive) ||
@@ -149,16 +155,20 @@ export class ClockDBus {
                 return JSON.stringify({ error: 'invalid' });
 
             let sessions = this._clock.sessionsForDays(fromDayKey, toDayKeyExclusive);
-            let rows = mergeSessions(sessions, readClients(this._settings));
+            let clients = readClients(this._settings);
+            let rows = mergeSessions(sessions, clients);
             let text = format === 'csv' ? toCSV(rows) : toJSON(rows);
             Gio.File.new_for_path(path).replace_contents(
                 new TextEncoder().encode(text),
                 null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 
-            // markExported() itself skips any still-running session, so the
-            // whole id list can be passed through without filtering here.
-            this._clock.markExported(sessions.map(s => s.id));
-            return JSON.stringify({ rows: rows.length });
+            // Only the sessions that actually produced a row: mergeSessions
+            // also excludes a non-billable or unknown client and a
+            // negative-duration record, and markExported() must not stamp
+            // exportedAt on a session that never appeared in the file.
+            let exportable = selectExportable(sessions, clients);
+            this._clock.markExported(exportable.map(s => s.id));
+            return JSON.stringify({ rows: rows.length, recorded: !this._clock.readOnly });
         } catch (e) {
             return JSON.stringify({ error: e.message });
         }

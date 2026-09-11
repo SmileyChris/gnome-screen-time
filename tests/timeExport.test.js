@@ -1,5 +1,5 @@
 import { test, assertEqual } from './harness.js';
-import { EXTERNAL_ID_PREFIX, mergeSessions, toCSV, toJSON } from '../src/timeExport.js';
+import { EXTERNAL_ID_PREFIX, mergeSessions, selectExportable, toCSV, toJSON } from '../src/timeExport.js';
 
 const CLIENTS = [
     { name: 'ACME', active: true, billable: true },
@@ -199,6 +199,49 @@ test('mergeSessions: a client name containing \':\' keeps external_id parseable'
     let withoutPrefix = rows[0].external_id.slice(`${EXTERNAL_ID_PREFIX}:`.length);
     let recoveredClient = withoutPrefix.slice(0, withoutPrefix.length - ':2026-09-11'.length);
     assertEqual(recoveredClient, 'A:B');
+});
+
+// --- selectExportable: the single source of truth for "what counts as
+// exported", shared by mergeSessions() and ClockDBus.ExportPeriod's
+// exportedAt stamping. A real bug: ExportPeriod used to stamp every session
+// in the period, including ones mergeSessions had silently dropped (a
+// non-billable client, say) - these tests pin the two down to agreeing by
+// construction, not just by inspection.
+
+test('selectExportable: excludes a non-billable client', () => {
+    let picked = selectExportable(
+        [session({ id: 'a', client: 'ACME' }), session({ id: 'b', client: 'Self' })], CLIENTS);
+    assertEqual(picked.map(s => s.id), ['a']);
+});
+
+test('selectExportable: excludes a client not on the list', () => {
+    let picked = selectExportable([session({ client: 'Ghost' })], CLIENTS);
+    assertEqual(picked, []);
+});
+
+test('selectExportable: excludes a running session', () => {
+    let picked = selectExportable([session({ endMs: null })], CLIENTS);
+    assertEqual(picked, []);
+});
+
+test('selectExportable: excludes a session with endMs before startMs', () => {
+    let picked = selectExportable([session({ startMs: 3600000, endMs: 0 })], CLIENTS);
+    assertEqual(picked, []);
+});
+
+test('selectExportable: mergeSessions(all) equals mergeSessions(selectExportable(all)) for a mixed set', () => {
+    let all = [
+        session({ id: 'a', client: 'ACME' }),
+        session({ id: 'b', client: 'Self' }),              // non-billable
+        session({ id: 'c', client: 'Ghost' }),              // unknown client
+        session({ id: 'd', endMs: null }),                  // running
+        session({ id: 'e', startMs: 3600000, endMs: 0 }),   // negative duration
+        session({ id: 'f', client: 'BETA', dayKey: '2026-09-12' }),
+    ];
+    assertEqual(
+        mergeSessions(all, CLIENTS),
+        mergeSessions(selectExportable(all, CLIENTS), CLIENTS),
+        'pre-filtering to selectExportable() must never change mergeSessions\' output');
 });
 
 test('toJSON: serialises rows as an array with a trailing newline', () => {

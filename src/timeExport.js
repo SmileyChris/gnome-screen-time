@@ -47,6 +47,33 @@ function compareStrings(a, b) {
     return a < b ? -1 : a > b ? 1 : 0;
 }
 
+// Exactly the sessions mergeSessions() turns into a row: closed, a known
+// billable client, non-negative duration. Exported so a caller that also
+// needs to know *which* sessions were actually exported — ClockDBus's
+// ExportPeriod, to stamp exportedAt only on those — reads the same rule
+// mergeSessions applies internally, rather than re-deriving it and risking
+// the two drifting apart. That drift was a real bug: ExportPeriod used to
+// stamp every session in the period, including ones mergeSessions had
+// silently dropped (a non-billable client, say), so a session that never
+// appeared in the exported file still ended up marked "· exported" in the
+// Timesheet.
+export function selectExportable(sessions, clients) {
+    let billable = new Set(clients.filter(c => c.billable).map(c => c.name));
+    return sessions.filter(session => {
+        if (session.endMs === null || session.endMs === undefined)
+            return false;
+        if (!billable.has(session.client))
+            return false;
+        // A session whose endMs precedes its startMs has a negative
+        // duration. update() and clockStore's load-time validation both
+        // refuse this already, but these rows are money: this does not
+        // trust either of those upstream guards and drops it here too, as
+        // a last line of defence against a hand-edited or otherwise
+        // corrupted record.
+        return sessionMs(session) >= 0;
+    });
+}
+
 // One row per client per day. Identity is external_id, which is stable across
 // re-exports: the receiving side upserts on it, so correcting a session and
 // exporting the period again updates the row instead of duplicating it.
@@ -56,25 +83,10 @@ function compareStrings(a, b) {
 // (YYYY-MM-DD) final component — strip the "screen-time:" prefix and the
 // ":YYYY-MM-DD" suffix and whatever remains is the client, colons and all.
 export function mergeSessions(sessions, clients, nowMs = Date.now()) {
-    let billable = new Set(clients.filter(c => c.billable).map(c => c.name));
     let byKey = new Map();
 
-    for (let session of sessions) {
-        if (session.endMs === null || session.endMs === undefined)
-            continue;
-        if (!billable.has(session.client))
-            continue;
-
-        // A session whose endMs precedes its startMs has a negative
-        // duration. update() and clockStore's load-time validation both
-        // refuse this already, but these rows are money: mergeSessions
-        // does not trust either of those upstream guards and drops it here
-        // too, as a last line of defence against a hand-edited or
-        // otherwise corrupted record.
+    for (let session of selectExportable(sessions, clients)) {
         let ms = sessionMs(session);
-        if (ms < 0)
-            continue;
-
         let key = `${session.dayKey}\0${session.client}`;
         let row = byKey.get(key);
         if (!row) {

@@ -194,9 +194,20 @@ export class TimesheetWindow {
                 let [json] = this._proxy.ExportPeriodSync(
                     fromDayKey, toDayKeyExclusive, path, format);
                 let result2 = JSON.parse(json);
-                this._toast(result2.error
-                    ? `Export failed: ${describeExportError(result2.error)}`
-                    : `Exported ${result2.rows} row(s) to ${path}`);
+                if (result2.error) {
+                    this._toast(`Export failed: ${describeExportError(result2.error)}`);
+                } else if (result2.recorded === false) {
+                    // The file itself was written fine; only the in-store
+                    // exportedAt stamps couldn't reach disk (ClockStore is
+                    // read-only - see clockStore.js), so the Timesheet's
+                    // "· exported" marker for these sessions won't survive
+                    // a Shell restart. Surfaced here rather than left in
+                    // the journal, which isn't somewhere a user looks.
+                    this._toast(`Exported ${result2.rows} row(s) to ${path}, ` +
+                        "but couldn't record the export against the sessions.");
+                } else {
+                    this._toast(`Exported ${result2.rows} row(s) to ${path}`);
+                }
             } catch (e) {
                 this._toast(`Export failed: ${e.message}`);
             }

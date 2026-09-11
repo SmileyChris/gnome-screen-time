@@ -3,6 +3,7 @@ import Gio from 'gi://Gio';
 import { test, assert, assertEqual } from './harness.js';
 import { FakeSettings } from './fakeSettings.js';
 import { ClockStore, CLOCK_FILE } from '../src/clockStore.js';
+import { selectExportable } from '../src/timeExport.js';
 
 function at(y, mo, d, h, mi = 0) {
     return GLib.DateTime.new_local(y, mo, d, h, mi, 0).to_unix() * 1000;
@@ -499,6 +500,37 @@ test('ClockStore: markExported with nothing matching stamps nothing and fires no
     let count = clock.markExported(['does-not-exist'], t + 1000);
     assertEqual(count, 0);
     assertEqual(fired, 0, 'nothing changed, so no save or notification');
+    clock.destroy();
+});
+
+// Mirrors ClockDBus.ExportPeriod's own sequence (sessionsForDays() ->
+// selectExportable() -> markExported()) against a real ClockStore, since a
+// unit test of markExported alone can't catch markExported and
+// selectExportable disagreeing about what "exported" means - which is
+// exactly the bug this pairing exists to prevent: a non-billable session's
+// time never reaches the exported file, so it must never pick up
+// exportedAt either, even though it was in the same period.
+test('ClockStore: selectExportable + markExported, run in sequence, stamps only the billable session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let billable = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let nonBillable = clock.start('Self', t + 3600000);
+    clock.stop(t + 7200000);
+
+    let clients = [
+        { name: 'ACME', active: true, billable: true },
+        { name: 'Self', active: true, billable: false },
+    ];
+    let sessions = clock.sessionsForDays('2026-09-11', '2026-09-12');
+    let exportable = selectExportable(sessions, clients);
+    let stampMs = t + 8000000;
+    clock.markExported(exportable.map(s => s.id), stampMs);
+
+    assertEqual(clock.sessionById(billable.id).exportedAt, stampMs,
+        'the billable session produced a row and was recorded as exported');
+    assertEqual(clock.sessionById(nonBillable.id).exportedAt, null,
+        'the non-billable session never produced a row, so it must not be stamped either');
     clock.destroy();
 });
 
