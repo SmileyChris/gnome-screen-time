@@ -314,10 +314,17 @@ export class TimesheetWindow {
             subtitle += `   ${billed.toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
         else
             subtitle += `   ${actual.toFixed(2)} h`;
+        // cleanStop is set only by ClockStore.closeForShutdown(), which now
+        // runs only from the `global` 'shutdown' handler in extension.js
+        // (a real logout or full shutdown/reboot) - never from a lock, an
+        // idle blank or a suspend, which leave the session open instead
+        // (see ClockStore.release()). "interrupted" covers what's left:
+        // the Shell went away with no clean goodbye at all - a crash, or a
+        // logout/shutdown whose 'shutdown' handler didn't run in time.
         if (session.interrupted)
             subtitle += '   · interrupted';
         else if (session.cleanStop)
-            subtitle += '   · stopped at logout';
+            subtitle += '   · stopped at shutdown';
         if (session.exportedAt)
             subtitle += '   · exported';
 
