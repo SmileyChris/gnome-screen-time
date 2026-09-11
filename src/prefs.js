@@ -192,7 +192,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
 
         this._addLimitsGroup(page, settings, data);
 
-        this._addClientsGroup(page, settings);
+        this._addClientsGroup(page, settings, window);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
         page.add(retentionGroup);
@@ -473,11 +473,17 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
     // The client list is the only place clients get created: the popup
     // cannot take text input sanely. Non-billable clients (personal work,
     // this extension itself) stay listed and trackable; the Billable switch
-    // only controls whether export later includes them.
-    _addClientsGroup(page, settings) {
+    // only controls whether export later includes them. Active is the only
+    // way to retire a client short of deleting it outright: recentClients()
+    // (clients.js) excludes an inactive client from the popup's padding, but
+    // selectExportable() (timeExport.js) keeps it exportable regardless, so
+    // turning a client inactive - rather than deleting it - is how its
+    // history stays reachable from a later export.
+    _addClientsGroup(page, settings, window) {
         const clientsGroup = new Adw.PreferencesGroup({
             title: 'Clients',
-            description: 'Who the clock can bill time to. Non-billable clients are tracked but left out of exports.',
+            description: 'Who the clock can bill time to. Non-billable clients are tracked but ' +
+                'left out of exports; inactive ones stay out of the popup but stay exportable.',
         });
         page.add(clientsGroup);
 
@@ -490,6 +496,17 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             list.forEach((client, i) => {
                 let row = new Adw.ActionRow({ title: client.name });
 
+                let active = new Gtk.Switch({
+                    active: client.active, valign: Gtk.Align.CENTER,
+                    tooltip_text: 'Active (offered in the popup)',
+                });
+                active.connect('notify::active', () => {
+                    let next = readClients(settings);
+                    next[i].active = active.active;
+                    writeClients(settings, next);
+                });
+                row.add_suffix(active);
+
                 let billable = new Gtk.Switch({
                     active: client.billable, valign: Gtk.Align.CENTER,
                     tooltip_text: 'Billable',
@@ -501,15 +518,38 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                 });
                 row.add_suffix(billable);
 
+                // Deleting is the only way to make a client's name stop
+                // resolving at all: selectExportable() and mergeSessions()
+                // (timeExport.js) key rows by client name, so a session
+                // already recorded against a deleted client can never be
+                // exported again unless the same name is added back -
+                // turning it inactive instead keeps that door open.
                 let remove = new Gtk.Button({
                     icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER,
                     css_classes: ['flat'],
                 });
                 remove.connect('clicked', () => {
-                    let next = readClients(settings);
-                    next.splice(i, 1);
-                    writeClients(settings, next);
-                    renderClients();
+                    let dialog = new Adw.AlertDialog({
+                        heading: `Delete ${client.name}?`,
+                        body: `Sessions already recorded for ${client.name} will no longer be ` +
+                            'exported unless the client is added again, even though they stay ' +
+                            'in the Timesheet. Consider turning it inactive instead - it drops ' +
+                            'out of the popup but stays exportable.',
+                    });
+                    dialog.add_response('cancel', 'Cancel');
+                    dialog.add_response('delete', 'Delete');
+                    dialog.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE);
+                    dialog.set_default_response('cancel');
+                    dialog.set_close_response('cancel');
+                    dialog.connect('response', (_dialog, response) => {
+                        if (response !== 'delete')
+                            return;
+                        let next = readClients(settings);
+                        next.splice(i, 1);
+                        writeClients(settings, next);
+                        renderClients();
+                    });
+                    dialog.present(window);
                 });
                 row.add_suffix(remove);
 

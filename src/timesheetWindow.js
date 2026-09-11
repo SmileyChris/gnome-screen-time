@@ -197,6 +197,16 @@ export class TimesheetWindow {
                 let [json] = this._proxy.ExportPeriodSync(
                     fromDayKey, toDayKeyExclusive, path, format);
                 let result2 = JSON.parse(json);
+                // Sessions skipped because their client isn't on the list at
+                // all (most likely deleted from Preferences - see
+                // clients.js's isKnownClient and prefs.js's confirm-delete
+                // dialog), not the non-billable ones selectExportable()
+                // deliberately drops without a word. Appended to whichever
+                // branch below actually reports success, so it never appears
+                // alongside an outright failure that wrote nothing.
+                let skippedNote = result2.skippedUnknown > 0
+                    ? ` ${result2.skippedUnknown} session(s) skipped for an unknown client.`
+                    : '';
                 if (result2.error) {
                     this._toast(`Export failed: ${describeExportError(result2.error)}`);
                 } else if (result2.recorded === false) {
@@ -207,9 +217,9 @@ export class TimesheetWindow {
                     // a Shell restart. Surfaced here rather than left in
                     // the journal, which isn't somewhere a user looks.
                     this._toast(`Exported ${result2.rows} row(s) to ${path}, ` +
-                        "but couldn't record the export against the sessions.");
+                        `but couldn't record the export against the sessions.${skippedNote}`);
                 } else {
-                    this._toast(`Exported ${result2.rows} row(s) to ${path}`);
+                    this._toast(`Exported ${result2.rows} row(s) to ${path}${skippedNote}`);
                 }
             } catch (e) {
                 this._toast(`Export failed: ${e.message}`);

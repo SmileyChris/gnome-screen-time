@@ -1,7 +1,7 @@
 import Gio from 'gi://Gio';
 import { evidenceFor } from './evidence.js';
 import { readClients } from './clients.js';
-import { mergeSessions, selectExportable, toJSON, toCSV } from './timeExport.js';
+import { mergeSessions, selectExportable, countSkippedUnknown, toJSON, toCSV } from './timeExport.js';
 
 const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime/Clock';
 
@@ -168,7 +168,15 @@ export class ClockDBus {
             // exportedAt on a session that never appeared in the file.
             let exportable = selectExportable(sessions, clients);
             this._clock.markExported(exportable.map(s => s.id));
-            return JSON.stringify({ rows: rows.length, recorded: !this._clock.readOnly });
+            // Closed sessions skipped specifically because their client
+            // isn't on the list at all (deleted from Preferences, most
+            // likely) - not the non-billable ones selectExportable() also
+            // drops, which are a deliberate exclusion, not something to
+            // flag. The window mentions this when it's non-zero.
+            let skippedUnknown = countSkippedUnknown(sessions, clients);
+            return JSON.stringify({
+                rows: rows.length, recorded: !this._clock.readOnly, skippedUnknown,
+            });
         } catch (e) {
             return JSON.stringify({ error: e.message });
         }

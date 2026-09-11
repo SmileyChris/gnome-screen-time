@@ -16,6 +16,21 @@ export function activeClients(settings) {
     return readClients(settings).filter(c => c.active);
 }
 
+// Whether `name` still names an entry in the client list at all - active or
+// not, billable or not. A client can be deleted from Preferences while
+// last-client (the setting the panel's Start button and the toggle-clock
+// shortcut both start blindly) still remembers its name; starting a clock
+// for a name no longer in the list at all would create billing history for
+// a client nobody can see, export, or manage by name any more. Deliberately
+// not restricted to activeClients(): an inactive client is still meant to
+// stay clockable and exportable (see readClients's `active` field), just
+// out of the popup's padding.
+export function isKnownClient(settings, name) {
+    if (!name)
+        return false;
+    return readClients(settings).some(c => c.name === name);
+}
+
 // What the popup lists: clients used today, in the order they were first
 // clocked, padded from the active list so the section never collapses to a
 // single row.

@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import { test, assert, assertEqual } from './harness.js';
 import { FakeSettings } from './fakeSettings.js';
 import { ClockStore, CLOCK_FILE } from '../src/clockStore.js';
-import { readClients, writeClients, activeClients, recentClients } from '../src/clients.js';
+import { readClients, writeClients, activeClients, recentClients, isKnownClient } from '../src/clients.js';
 
 function at(y, mo, d, h, mi = 0) {
     return GLib.DateTime.new_local(y, mo, d, h, mi, 0).to_unix() * 1000;
@@ -58,6 +58,35 @@ test('clients: activeClients filters out inactive entries regardless of billable
         { name: 'ACME', active: true, billable: true },
         { name: 'Personal', active: true, billable: false },
     ]);
+});
+
+// --- isKnownClient ---
+
+test('isKnownClient: true for a client on the list, active or not', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [
+        { name: 'ACME', active: true, billable: true },
+        { name: 'OldCo', active: false, billable: true },
+    ]);
+    assertEqual(isKnownClient(settings, 'ACME'), true);
+    assertEqual(isKnownClient(settings, 'OldCo'), true, 'inactive is still known - only delete removes it');
+});
+
+test('isKnownClient: false for a name not on the list at all', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    assertEqual(isKnownClient(settings, 'Ghost'), false);
+});
+
+test('isKnownClient: false for an empty name', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    assertEqual(isKnownClient(settings, ''), false);
+});
+
+test('isKnownClient: false against an empty client list', () => {
+    let settings = new FakeSettings();
+    assertEqual(isKnownClient(settings, 'ACME'), false);
 });
 
 // --- recentClients ---

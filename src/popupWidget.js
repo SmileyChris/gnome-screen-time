@@ -7,6 +7,7 @@ import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ClockSection } from './clockSection.js';
+import { isKnownClient } from './clients.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow } from './usageRows.js';
 
@@ -320,11 +321,13 @@ export class PopupWidget {
         if (isToday) {
             // Nothing to start with no session running and no client ever
             // clocked in (a fresh install, or before any client has been
-            // clocked): render the button insensitive and dimmed rather
-            // than a live control that does nothing when pressed - the
-            // same convention the date-nav arrows use above.
+            // clocked), or with last-client naming one since deleted from
+            // Preferences (see clients.js's isKnownClient): render the
+            // button insensitive and dimmed rather than a live control that
+            // does nothing when pressed - the same convention the date-nav
+            // arrows use above.
             let canStart = !!this._clock &&
-                (running !== null || this._settings.get_string('last-client').length > 0);
+                (running !== null || isKnownClient(this._settings, this._settings.get_string('last-client')));
             let toggle = new St.Button({
                 style: 'padding: 4px 10px; border-radius: 9px; font-weight: 700; ' +
                        'color: ' + CARD_FG + '; border: 1px solid ' + CARD_FG + '55;',
@@ -347,7 +350,7 @@ export class PopupWidget {
                             this._clock.stop();
                         } else {
                             let last = this._settings.get_string('last-client');
-                            if (last.length === 0)
+                            if (!isKnownClient(this._settings, last))
                                 return;
                             this._clock.start(last);
                         }

@@ -10,6 +10,7 @@ import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
+import { isKnownClient } from './clients.js';
 import { migratePanelSetting, panelClockState } from './panelMode.js';
 import { nudgeDue, awayMomentMs, awayNudgeDue } from './nudge.js';
 import { IntervalLog } from './intervalLog.js';
@@ -264,13 +265,14 @@ export default class ScreenTimeExtension extends Extension {
     }
 
     // Stops if running; otherwise starts the last client used. With no
-    // clients configured there is nothing to start, so it does nothing.
+    // clients configured, or with last-client naming one since deleted from
+    // Preferences, there is nothing to start, so it does nothing.
     _toggleClock() {
         if (this._clock.running) {
             this._clock.stop();
         } else {
             let last = this._settings.get_string('last-client');
-            if (last.length === 0)
+            if (!isKnownClient(this._settings, last))
                 return;
             this._clock.start(last);
         }

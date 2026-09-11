@@ -74,6 +74,23 @@ export function selectExportable(sessions, clients) {
     });
 }
 
+// Closed sessions in `sessions` whose client isn't on the list at all -
+// active or not, billable or not. Deliberately narrower than "excluded by
+// selectExportable()": a non-billable client's sessions are excluded there
+// on purpose (see the module comment above), and are not counted here.
+// An unknown client usually means it was deleted from Preferences (see
+// prefs.js's confirm-delete dialog and clients.js's isKnownClient) after
+// already being clocked against - its sessions still exist and would still
+// be billable in principle, but nothing here can put a name on their row
+// any more, so ExportPeriod surfaces this count for the Timesheet to
+// mention rather than letting them vanish from an export with no trace.
+export function countSkippedUnknown(sessions, clients) {
+    let known = new Set(clients.map(c => c.name));
+    return sessions.filter(session =>
+        (session.endMs !== null && session.endMs !== undefined) && !known.has(session.client)
+    ).length;
+}
+
 // One row per client per day. Identity is external_id, which is stable across
 // re-exports: the receiving side upserts on it, so correcting a session and
 // exporting the period again updates the row instead of duplicating it.

@@ -1,5 +1,5 @@
 import { test, assertEqual } from './harness.js';
-import { EXTERNAL_ID_PREFIX, mergeSessions, selectExportable, toCSV, toJSON } from '../src/timeExport.js';
+import { EXTERNAL_ID_PREFIX, mergeSessions, selectExportable, countSkippedUnknown, toCSV, toJSON } from '../src/timeExport.js';
 
 const CLIENTS = [
     { name: 'ACME', active: true, billable: true },
@@ -242,6 +242,39 @@ test('selectExportable: mergeSessions(all) equals mergeSessions(selectExportable
         mergeSessions(all, CLIENTS),
         mergeSessions(selectExportable(all, CLIENTS), CLIENTS),
         'pre-filtering to selectExportable() must never change mergeSessions\' output');
+});
+
+// --- countSkippedUnknown ---
+
+test('countSkippedUnknown: counts a closed session whose client is not on the list at all', () => {
+    let count = countSkippedUnknown([session({ client: 'Ghost' })], CLIENTS);
+    assertEqual(count, 1);
+});
+
+test('countSkippedUnknown: does not count a non-billable client - that exclusion is deliberate', () => {
+    let count = countSkippedUnknown([session({ client: 'Self' })], CLIENTS);
+    assertEqual(count, 0);
+});
+
+test('countSkippedUnknown: does not count a known billable client', () => {
+    let count = countSkippedUnknown([session({ client: 'ACME' })], CLIENTS);
+    assertEqual(count, 0);
+});
+
+test('countSkippedUnknown: does not count a running session for an unknown client', () => {
+    let count = countSkippedUnknown([session({ client: 'Ghost', endMs: null })], CLIENTS);
+    assertEqual(count, 0);
+});
+
+test('countSkippedUnknown: sums across several unknown-client sessions, ignores everything else', () => {
+    let all = [
+        session({ id: 'a', client: 'Ghost' }),
+        session({ id: 'b', client: 'Ghost' }),
+        session({ id: 'c', client: 'ACME' }),
+        session({ id: 'd', client: 'Self' }),
+        session({ id: 'e', client: 'Ghost', endMs: null }),
+    ];
+    assertEqual(countSkippedUnknown(all, CLIENTS), 2);
 });
 
 test('toJSON: serialises rows as an array with a trailing newline', () => {
