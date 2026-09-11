@@ -11,10 +11,16 @@ import { INTERFACE_XML } from './clockDBus.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
-GLib.set_prgname('screen-time-timesheet');
+// billedHours may be legitimately 0, so this must never be a truthiness
+// check - a deliberately zeroed session would otherwise display its actual
+// hours instead. One helper so every caller (more arrive in later tasks)
+// gets this right by construction.
+function hasBilledHours(session) {
+    return session.billedHours !== null && session.billedHours !== undefined;
+}
 
 function hoursOf(session) {
-    if (session.billedHours !== null && session.billedHours !== undefined)
+    if (hasBilledHours(session))
         return session.billedHours;
     return ((session.endMs ?? Date.now()) - session.startMs) / 3600000;
 }
@@ -29,9 +35,19 @@ function clockOf(ms) {
 
 export class TimesheetWindow {
     constructor(app) {
-        this._proxy = new ClockProxy(
-            Gio.DBus.session, 'org.gnome.Shell',
-            '/org/gnome/Shell/Extensions/ScreenTime/Clock');
+        // The session bus itself can be unreachable (not just the Clock
+        // object on it), which throws here rather than lazily on first
+        // call. Either way the window must still appear, with the error
+        // surfaced in place of a session list.
+        this._proxy = null;
+        let proxyError = null;
+        try {
+            this._proxy = new ClockProxy(
+                Gio.DBus.session, 'org.gnome.Shell',
+                '/org/gnome/Shell/Extensions/ScreenTime/Clock');
+        } catch (e) {
+            proxyError = e;
+        }
 
         this.window = new Adw.ApplicationWindow({
             application: app,
@@ -49,49 +65,67 @@ export class TimesheetWindow {
         this.window.content = this._toasts;
 
         this._groups = [];
+        this._refreshing = false;
+        if (proxyError) {
+            this._showError(`Could not reach the extension: ${proxyError.message}`);
+            return;
+        }
         this._proxy.connectSignal('ClockChanged', () => this.refresh());
         this.refresh();
     }
 
     // Everything the Shell holds for the last 30 days. The Shell is the only
     // writer, so this process never reads a file.
+    //
+    // ClockChanged can fire in a burst once editing lands, and this method
+    // makes a blocking call in the middle of rebuilding _groups; a second,
+    // overlapping refresh() would duplicate day groups. Dropping a refresh
+    // that arrives while one is already running is fine - the next
+    // ClockChanged (or the reopen) catches the window up.
     refresh() {
-        for (let group of this._groups.splice(0))
-            this._page.remove(group);
-
-        let to = Date.now();
-        let from = to - 30 * 24 * 3600 * 1000;
-        let sessions;
+        if (this._refreshing)
+            return;
+        this._refreshing = true;
         try {
-            let [json] = this._proxy.GetSessionsSync(from, to);
-            sessions = JSON.parse(json);
-        } catch (e) {
-            this._showError(`Could not reach the extension: ${e.message}`);
-            return;
-        }
+            for (let group of this._groups.splice(0))
+                this._page.remove(group);
 
-        if (sessions.length === 0) {
-            this._showError('Nothing on the clock yet. Start a client from the panel.');
-            return;
-        }
+            let to = Date.now();
+            let from = to - 30 * 24 * 3600 * 1000;
+            let sessions;
+            try {
+                let [json] = this._proxy.GetSessionsSync(from, to);
+                sessions = JSON.parse(json);
+            } catch (e) {
+                this._showError(`Could not reach the extension: ${e.message}`);
+                return;
+            }
 
-        let byDay = new Map();
-        for (let session of sessions) {
-            if (!byDay.has(session.dayKey))
-                byDay.set(session.dayKey, []);
-            byDay.get(session.dayKey).push(session);
-        }
+            if (sessions.length === 0) {
+                this._showError('Nothing on the clock yet. Start a client from the panel.');
+                return;
+            }
 
-        for (let [dayKey, daySessions] of [...byDay].reverse()) {
-            let billed = daySessions.reduce((sum, s) => sum + hoursOf(s), 0);
-            let group = new Adw.PreferencesGroup({
-                title: dayKey,
-                description: `${billed.toFixed(2)} h`,
-            });
-            for (let session of daySessions)
-                group.add(this._sessionRow(session));
-            this._page.add(group);
-            this._groups.push(group);
+            let byDay = new Map();
+            for (let session of sessions) {
+                if (!byDay.has(session.dayKey))
+                    byDay.set(session.dayKey, []);
+                byDay.get(session.dayKey).push(session);
+            }
+
+            for (let [dayKey, daySessions] of [...byDay].reverse()) {
+                let billed = daySessions.reduce((sum, s) => sum + hoursOf(s), 0);
+                let group = new Adw.PreferencesGroup({
+                    title: dayKey,
+                    description: `${billed.toFixed(2)} h`,
+                });
+                for (let session of daySessions)
+                    group.add(this._sessionRow(session));
+                this._page.add(group);
+                this._groups.push(group);
+            }
+        } finally {
+            this._refreshing = false;
         }
     }
 
@@ -100,7 +134,7 @@ export class TimesheetWindow {
         let actual = actualHoursOf(session);
         let billed = hoursOf(session);
         let subtitle = `${clockOf(session.startMs)}–${end}`;
-        if (session.billedHours !== null && session.billedHours !== undefined)
+        if (hasBilledHours(session))
             subtitle += `   ${billed.toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
         else
             subtitle += `   ${actual.toFixed(2)} h`;
