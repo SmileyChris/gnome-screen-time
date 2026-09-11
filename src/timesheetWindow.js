@@ -33,6 +33,19 @@ function actualHoursOf(session) {
     return ((session.endMs ?? Date.now()) - session.startMs) / 3600000;
 }
 
+// A session's contribution in whole milliseconds - mirrors timeExport.js's
+// sessionMs(), for the same reason: summing hoursOf() as a float per
+// session and adding those floats together can round to a different total
+// than summing whole milliseconds and rounding once, since hours cannot
+// exactly represent most decimal fractions. Used only for the per-day total
+// below, so this window's own figure never quietly disagrees with what
+// actually gets exported for the same day.
+function sessionMs(session) {
+    if (hasBilledHours(session))
+        return Math.round(session.billedHours * 3600000);
+    return (session.endMs ?? Date.now()) - session.startMs;
+}
+
 function clockOf(ms) {
     return GLib.DateTime.new_from_unix_local(ms / 1000).format('%H:%M');
 }
@@ -363,7 +376,12 @@ export class TimesheetWindow {
             }
 
             for (let [dayKey, daySessions] of [...byDay].reverse()) {
-                let billed = daySessions.reduce((sum, s) => sum + hoursOf(s), 0);
+                // Whole milliseconds summed, then rounded once - see
+                // sessionMs() above - so this total never quietly disagrees
+                // with mergeSessions()'s own row for the same day by the
+                // ~0.01h a per-session float sum can drift by.
+                let totalMs = daySessions.reduce((sum, s) => sum + sessionMs(s), 0);
+                let billed = Math.round(totalMs / 36000) / 100;
                 let group = new Adw.PreferencesGroup({
                     title: dayKey,
                     description: `${billed.toFixed(2)} h`,
