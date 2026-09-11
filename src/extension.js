@@ -296,13 +296,22 @@ export default class ScreenTimeExtension extends Extension {
     // clients configured, or with last-client naming one since deleted from
     // Preferences, there is nothing to start, so it does nothing.
     _toggleClock() {
-        if (this._clock.running) {
-            this._clock.stop();
-        } else {
-            let last = this._settings.get_string('last-client');
-            if (!isKnownClient(this._settings, last))
-                return;
-            this._clock.start(last);
+        try {
+            if (this._clock.running) {
+                this._clock.stop();
+            } else {
+                let last = this._settings.get_string('last-client');
+                if (!isKnownClient(this._settings, last))
+                    return;
+                this._clock.start(last);
+            }
+        } catch (e) {
+            // start()/stop() throw only when the system clock is out of
+            // range; the keyboard shortcut has no toast of its own, so log
+            // and leave the popup showing whatever actually happened rather
+            // than refreshing it into a state that implies success.
+            console.error(`[ScreenTime] toggle-clock failed: ${e.message}`);
+            return;
         }
         this._popup?.refresh();
     }

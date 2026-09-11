@@ -79,10 +79,20 @@ export class ClockSection {
                 // whatever session is actually running instead of the
                 // tapped client.
                 let running = this._clock.running?.client === name;
-                if (running)
-                    this._clock.stop();
-                else
-                    this._clock.start(name);
+                try {
+                    if (running)
+                        this._clock.stop();
+                    else
+                        this._clock.start(name);
+                } catch (e) {
+                    // start()/stop() throw only when the system clock is
+                    // out of range; there is no toast in the popup, so log
+                    // and leave last-client/the rebuild alone rather than
+                    // recording a client switch that never actually
+                    // happened.
+                    console.error(`[ScreenTime] clock tap failed: ${e.message}`);
+                    return;
+                }
                 this._settings.set_string('last-client', name);
                 rebuild();
             });

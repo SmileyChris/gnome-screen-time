@@ -142,8 +142,12 @@ export class ClockDBus {
     }
 
     StopSession() {
-        let session = this._clock.stop();
-        return JSON.stringify(session ? { ...session, saved: this._saved() } : null);
+        try {
+            let session = this._clock.stop();
+            return JSON.stringify(session ? { ...session, saved: this._saved() } : null);
+        } catch (e) {
+            return JSON.stringify({ error: e.message });
+        }
     }
 
     UpdateSession(sessionId, fields) {

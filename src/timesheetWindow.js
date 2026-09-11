@@ -254,6 +254,17 @@ export class TimesheetWindow {
                 return;   // cancelled
             }
             let path = file.get_path();
+            // null for a location with no local path - a GVFS/remote
+            // location (SFTP, a cloud-storage mount) browsed through the
+            // picker without ever resolving to one. ExportPeriod also
+            // refuses a non-absolute path (see ClockDBus's
+            // GLib.path_is_absolute() check), but null.endsWith() below
+            // would throw first, outside the try that reports everything
+            // else here as a toast.
+            if (path === null) {
+                this._toast('Export failed: pick a location on this computer.');
+                return;
+            }
             let format = path.endsWith('.csv') ? 'csv' : 'json';
             try {
                 let [json] = this._proxy.ExportPeriodSync(
