@@ -141,3 +141,42 @@ test('clients: recentClients never uses an inactive client as padding, even with
     assertEqual(names, ['ACME']);
     clock.destroy();
 });
+
+// A client clocked today only ever comes from sessionsForDay(), never from
+// the client list: it must still show up even after being deleted or
+// deactivated, since it has time logged against it today regardless of its
+// current standing in Clients preferences.
+
+test('clients: recentClients lists a client clocked today that has since been deleted from the client list', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('GHOST', t);
+    clock.stop(t + 3600000);
+
+    // GHOST never appears in the client list at all - as if removed.
+    writeClients(settings, [
+        { name: 'ACME', active: true, billable: true },
+    ]);
+
+    let names = recentClients(settings, clock, '2026-09-11', 2);
+    assertEqual(names, ['GHOST', 'ACME'], 'GHOST has time today and must lead, though it is not a known client');
+    clock.destroy();
+});
+
+test('clients: recentClients lists a client clocked today that has since been made inactive', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('GHOST', t);
+    clock.stop(t + 3600000);
+
+    writeClients(settings, [
+        { name: 'GHOST', active: false, billable: true }, // deactivated after being clocked today
+        { name: 'ACME', active: true, billable: true },
+    ]);
+
+    let names = recentClients(settings, clock, '2026-09-11', 2);
+    assertEqual(names, ['GHOST', 'ACME'], 'GHOST has time today and must lead, though it is now inactive');
+    clock.destroy();
+});
