@@ -84,11 +84,26 @@ function decodeLine(row) {
     return { s: row[0], e: row[1], path, names };
 }
 
+// Preferences' "Delete data older than 7 days" button (prefs.js's
+// HISTORY_DAYS) sets purge-requested to a timestamp; UsageStore listens for
+// the same signal with its own matching constant. Kept separate rather than
+// imported, matching how each module already carries its own copy of "7"
+// rather than sharing one across a cross-module dependency for what is
+// fundamentally a UI-facing constant.
+const MANUAL_PURGE_DAYS = 7;
+
 export class IntervalLog {
     constructor(settings) {
         this._settings = settings;
         this._buf = [];
         this._ensureDir();
+        // The interval log is a timestamped timeline of everything that was
+        // on screen - at least as sensitive as the usage totals the manual
+        // purge button already covered, and previously left untouched by
+        // it entirely: "Delete data older than 7 days" deleted the totals
+        // but not the detailed evidence behind them.
+        this._purgeId = settings.connect(
+            'changed::purge-requested', () => this.purgeOlderThan(MANUAL_PURGE_DAYS));
     }
 
     _ensureDir() {
@@ -268,8 +283,13 @@ export class IntervalLog {
         return rows;
     }
 
-    purge() {
-        let days = this._settings.get_int('interval-retention-days');
+    // Deletes every day file entirely older than `days`. Shared by purge()
+    // below (the scheduled path, on interval-retention-days) and the
+    // manual purge-requested listener in the constructor (MANUAL_PURGE_DAYS,
+    // fixed at 7 regardless of the retention setting - the same relationship
+    // UsageStore's own _deleteOlderThan()/_cleanup()/_onPurgeRequested()
+    // already has).
+    purgeOlderThan(days) {
         if (days <= 0)
             return;
         let cutoff = dateKey(
@@ -293,8 +313,16 @@ export class IntervalLog {
         enumerator.close(null);
     }
 
+    purge() {
+        this.purgeOlderThan(this._settings.get_int('interval-retention-days'));
+    }
+
     destroy() {
         this.flushAll();
+        if (this._purgeId) {
+            this._settings.disconnect(this._purgeId);
+            this._purgeId = null;
+        }
         this._settings = null;
     }
 }

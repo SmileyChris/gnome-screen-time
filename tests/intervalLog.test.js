@@ -225,6 +225,71 @@ test('IntervalLog: retention 0 keeps everything', () => {
     log.destroy();
 });
 
+function intervalFileNames() {
+    let names = [];
+    let dir = Gio.File.new_for_path(INTERVAL_DIR);
+    let e = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+    let info;
+    while ((info = e.next_file(null)) !== null)
+        names.push(info.get_name());
+    e.close(null);
+    return names;
+}
+
+// --- M8: preferences' manual purge must also reach the interval log ---
+
+test('IntervalLog: purgeOlderThan(7) unlinks a file older than 7 days but keeps one from within the window', () => {
+    let log = freshLog();
+    let old = GLib.DateTime.new_now_local().add_days(-8).to_unix() * 1000;
+    let recent = GLib.DateTime.new_now_local().add_days(-2).to_unix() * 1000;
+    log.record(old, old + 30000, ['a'], ['A']);
+    log.record(recent, recent + 30000, ['b'], ['B']);
+    log.flushAll();
+    log.purgeOlderThan(7);
+    assertEqual(intervalFileNames().length, 1, 'only the 8-day-old file is gone');
+    log.destroy();
+});
+
+test('IntervalLog: purgeOlderThan(0) deletes nothing', () => {
+    let log = freshLog();
+    let old = GLib.DateTime.new_now_local().add_days(-400).to_unix() * 1000;
+    log.record(old, old + 30000, ['a'], ['A']);
+    log.flushAll();
+    log.purgeOlderThan(0);
+    assertEqual(intervalFileNames().length, 1);
+    log.destroy();
+});
+
+test('IntervalLog: a purge-requested setting change purges interval files older than 7 days, independent of interval-retention-days', () => {
+    // A generous retention setting that would keep everything on its own -
+    // the manual purge must reach past it, at its own fixed 7 days, exactly
+    // as UsageStore's own manual purge does for the usage totals.
+    let settings = new FakeSettings({ 'interval-retention-days': 365 });
+    let log = freshLog(settings);
+    let old = GLib.DateTime.new_now_local().add_days(-8).to_unix() * 1000;
+    let recent = GLib.DateTime.new_now_local().add_days(-2).to_unix() * 1000;
+    log.record(old, old + 30000, ['a'], ['A']);
+    log.record(recent, recent + 30000, ['b'], ['B']);
+    log.flushAll();
+    assertEqual(intervalFileNames().length, 2, 'both files exist before the purge request');
+
+    settings.set_int('purge-requested', GLib.DateTime.new_now_local().to_unix());
+    assertEqual(intervalFileNames().length, 1, 'the 8-day-old file is gone despite the 365-day retention setting');
+    log.destroy();
+});
+
+test('IntervalLog: destroy() disconnects the purge-requested listener', () => {
+    let settings = new FakeSettings();
+    let log = freshLog(settings);
+    let old = GLib.DateTime.new_now_local().add_days(-8).to_unix() * 1000;
+    log.record(old, old + 30000, ['a'], ['A']);
+    log.flushAll();
+    log.destroy();
+
+    settings.set_int('purge-requested', GLib.DateTime.new_now_local().to_unix());
+    assertEqual(intervalFileNames().length, 1, 'no listener left to react - and no crash doing nothing');
+});
+
 // Writes raw content to a day file, bypassing IntervalLog entirely, so a
 // crash mid-write or on-disk corruption can be simulated exactly.
 function writeDayFile(key, content) {
