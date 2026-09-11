@@ -13,6 +13,7 @@ import { LimitNotifier } from './limitNotifier.js';
 import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
 import { BrowserSource } from './browserSource.js';
 import { DbusService } from './dbusService.js';
+import { ClockDBus } from './clockDBus.js';
 
 export default class ScreenTimeExtension extends Extension {
     enable() {
@@ -56,6 +57,8 @@ export default class ScreenTimeExtension extends Extension {
         this._settings.connectObject(
             'changed::show-total-in-panel', () => this._syncPanelLabel(), this);
         this._syncPanelLabel();
+
+        this._clockDbus = new ClockDBus(this._clock, this._intervals, this._settings);
 
         // Registered last: if anything above throws, enable() aborts and the
         // extension is left in the ERROR state without disable() ever
@@ -121,6 +124,8 @@ export default class ScreenTimeExtension extends Extension {
         this._tracker = null;
         this._dbus?.destroy();
         this._dbus = null;
+        this._clockDbus?.destroy();
+        this._clockDbus = null;
         this._popup?.destroy();
         this._popup = null;
         this._indicator?.destroy();
