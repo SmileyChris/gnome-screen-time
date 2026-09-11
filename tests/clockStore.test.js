@@ -395,11 +395,17 @@ test('ClockStore: recover with nothing open returns null and touches nothing', (
     clock.start('ACME', t);
     clock.stop(t + 3600000);
     let before = clock.sessionsForDay('2026-09-11');
-    assertEqual(clock._dirty, false, 'precondition: nothing pending after stop()');
+
+    // _dirty alone doesn't discriminate here: _save() resets it to false on
+    // any successful write, so a mutant recover() that spuriously called
+    // _changed() would still leave _dirty === false. onChange firing is the
+    // real tell.
+    let fired = 0;
+    clock.onChange = () => { fired++; };
     let result = clock.recover(t + 7200000);
     assertEqual(result, null);
+    assertEqual(fired, 0, 'recover() with nothing open must not notify or save');
     assertEqual(clock.sessionsForDay('2026-09-11'), before, 'nothing changed');
-    assertEqual(clock._dirty, false, 'recover() with nothing open never marks the store dirty');
     clock.destroy();
 });
 
@@ -475,5 +481,36 @@ test('ClockStore: update ignores fields outside the documented allowlist', () =>
     assertEqual(updated.id, originalId, 'id is not writable through update()');
     assertEqual(updated.interrupted, false, 'interrupted is not writable through update()');
     assertEqual(updated.billedHours, 0.5, 'the legitimate field in the same call still applies');
+    clock.destroy();
+});
+
+test('ClockStore: update rejects reopening a closed session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+
+    let threw = null;
+    try {
+        clock.update(session.id, { endMs: null }, t + 7200000);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'reopen');
+    assertEqual(clock.sessionsForDay('2026-09-11')[0].endMs, t + 3600000, 'unchanged');
+    assertEqual(clock.running, null, 'still nothing running; resuming is start()\'s job');
+    clock.destroy();
+});
+
+test('ClockStore: update still accepts endMs: null for a session that is already running', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    // Still open; resending its own unchanged null endMs alongside a
+    // legitimate edit is not a reopen and must not be rejected.
+    let updated = clock.update(session.id, { startMs: t + 60000, endMs: null });
+    assertEqual(updated.startMs, t + 60000);
+    assertEqual(updated.endMs, null);
+    assertEqual(clock.running.id, session.id, 'still the running session');
     clock.destroy();
 });

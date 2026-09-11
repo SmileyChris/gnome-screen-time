@@ -235,6 +235,16 @@ export class ClockStore {
         }
 
         let next = { ...session, ...allowed };
+        // Reopening a closed session (endMs moving from non-null to null)
+        // is start()'s job, not update()'s: allowing it here would let a
+        // payload reaching update() from outside this module (a later
+        // task's D-Bus surface, say) put a second concurrent open session
+        // back on disk - exactly what recover() exists to clean up. A
+        // session that is already open and simply resends its own null
+        // endMs (e.g. alongside a startMs edit) is not a reopen and stays
+        // allowed.
+        if (session.endMs !== null && next.endMs === null)
+            throw new Error('reopen');
         if (next.endMs !== null && next.endMs < next.startMs)
             throw new Error('backwards');
         if (this._overlaps(next, nowMs))
