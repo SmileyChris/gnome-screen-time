@@ -759,6 +759,37 @@ test('ClockStore: load excludes an invalid record, keeps the valid one, and back
     clock.destroy();
 });
 
+test('ClockStore: load excludes a record whose endMs precedes its own startMs, and backs up the file', () => {
+    // Individually startMs and endMs are each a fine timestamp here - only
+    // the pair is wrong. isValidField() checks one field at a time and
+    // cannot catch this; it is isValidSessionRecord()'s cross-field check
+    // that must.
+    GLib.unlink(CLOCK_FILE);
+    deleteBackupFiles();
+    let t = at(2026, 9, 11, 9, 0);
+    let valid = openSession('valid-2', 'ACME', t, t + 3600000);
+    valid.endMs = t + 3600000;
+    let backwards = openSession('backwards-1', 'BETA', t + 3600000, t + 3600000);
+    backwards.endMs = t;   // before its own startMs
+    let raw = JSON.stringify({ sessions: [valid, backwards] });
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(raw), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    let day = clock.sessionsForDay('2026-09-11');
+    assertEqual(day.map(s => s.id), ['valid-2'], 'the backwards record is excluded, the valid one kept');
+
+    let backups = listBackupFiles();
+    assertEqual(backups.length, 1, 'the original file is backed up before the record is dropped');
+    let dir = GLib.path_get_dirname(CLOCK_FILE);
+    let [, backupBytes] = Gio.File.new_for_path(
+        GLib.build_filenamev([dir, backups[0]])).load_contents(null);
+    assertEqual(new TextDecoder().decode(backupBytes), raw, 'the backup is byte-for-byte the original file');
+
+    deleteBackupFiles();
+    clock.destroy();
+});
+
 test('ClockStore: load fills in defaults for a record missing interrupted/cleanStop/exportedAt, no backup', () => {
     GLib.unlink(CLOCK_FILE);
     deleteBackupFiles();

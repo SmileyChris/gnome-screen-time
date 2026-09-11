@@ -97,6 +97,15 @@ function isValidSessionRecord(record) {
         if (key in record && record[key] !== undefined && !isValidField(key, record[key]))
             return false;
     }
+    // isValidField() checks each field in isolation, so it cannot catch an
+    // endMs that individually looks like a fine timestamp but precedes its
+    // own startMs - only checkable here, once both are already known to be
+    // individually valid. update() refuses this same shape live; this is
+    // the same guarantee for a record that reached disk some other way (a
+    // hand edit, a partially-written file) and would otherwise load
+    // straight into billing data with a negative duration.
+    if (record.endMs !== null && record.endMs < record.startMs)
+        return false;
     return true;
 }
 

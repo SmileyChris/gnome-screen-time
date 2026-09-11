@@ -19,10 +19,32 @@
 
 export const EXTERNAL_ID_PREFIX = 'screen-time';
 
-function sessionHours(session) {
+// Returns a session's contribution in whole milliseconds, never hours.
+// `hours` is a float that cannot exactly represent most decimal fractions
+// (0.1, 0.335, ...), so accumulating a row's total in hours and rounding
+// the sum can mis-round a value that lands exactly on a half-cent: 1.005h
+// is actually stored as very slightly less than 1.005, so
+// Math.round(1.005 * 100) / 100 gives 1.00, not 1.01 — and the same target
+// reached a different way (summing three 0.335h sessions, say) can round
+// the *other* direction, because the float error compounds differently
+// each time. Milliseconds are whole numbers, so summing them across
+// sessions is exact; Math.round() below on a billedHours override
+// collapses that one multiplication's tiny float error back to the
+// nearest integer millisecond before it has a chance to accumulate.
+function sessionMs(session) {
     if (session.billedHours !== null && session.billedHours !== undefined)
-        return session.billedHours;
-    return (session.endMs - session.startMs) / 3600000;
+        return Math.round(session.billedHours * 3600000);
+    return session.endMs - session.startMs;
+}
+
+// Plain code-point comparison, not String.localeCompare(): rows upsert
+// independently on external_id, so their relative order in the export
+// carries no meaning to the receiving side — but it must still be the same
+// on every machine, and localeCompare collates via ICU and the running
+// locale, so identical input can sort differently from one machine to the
+// next (and typically case-insensitively, unlike this).
+function compareStrings(a, b) {
+    return a < b ? -1 : a > b ? 1 : 0;
 }
 
 // One row per client per day. Identity is external_id, which is stable across
@@ -43,6 +65,16 @@ export function mergeSessions(sessions, clients, nowMs = Date.now()) {
         if (!billable.has(session.client))
             continue;
 
+        // A session whose endMs precedes its startMs has a negative
+        // duration. update() and clockStore's load-time validation both
+        // refuse this already, but these rows are money: mergeSessions
+        // does not trust either of those upstream guards and drops it here
+        // too, as a last line of defence against a hand-edited or
+        // otherwise corrupted record.
+        let ms = sessionMs(session);
+        if (ms < 0)
+            continue;
+
         let key = `${session.dayKey}\0${session.client}`;
         let row = byKey.get(key);
         if (!row) {
@@ -50,12 +82,12 @@ export function mergeSessions(sessions, clients, nowMs = Date.now()) {
                 external_id: `${EXTERNAL_ID_PREFIX}:${session.client}:${session.dayKey}`,
                 client: session.client,
                 date: session.dayKey,
-                hours: 0,
+                totalMs: 0,
                 notes: [],
             };
             byKey.set(key, row);
         }
-        row.hours += sessionHours(session);
+        row.totalMs += ms;
         let note = session.description.trim();
         if (note.length > 0 && !row.notes.includes(note))
             row.notes.push(note);
@@ -66,21 +98,30 @@ export function mergeSessions(sessions, clients, nowMs = Date.now()) {
             external_id: row.external_id,
             client: row.client,
             date: row.date,
-            // Rounded once, on the sum: rounding each session first would
-            // drift the day's total by a cent's worth of time per row.
-            hours: Math.round(row.hours * 100) / 100,
+            // Rounded once, on the total, straight from whole milliseconds:
+            // row.totalMs / 36000 is row.totalMs / 3600000 (hours) * 100
+            // (cents) in one division, so this is the only floating-point
+            // step in the whole computation. See sessionMs() above for why
+            // rounding hours instead — even just once — is not safe.
+            hours: Math.round(row.totalMs / 36000) / 100,
             description: row.notes.join('; '),
         }))
-        .sort((a, b) => a.date.localeCompare(b.date) || a.client.localeCompare(b.client));
+        .sort((a, b) => compareStrings(a.date, b.date) || compareStrings(a.client, b.client));
 }
 
 export function toJSON(rows) {
     return `${JSON.stringify(rows, null, 2)}\n`;
 }
 
+// Not escaped here: a description or client starting with '=', '+', '-' or
+// '@' can be read as a formula by a spreadsheet importer. The standard
+// mitigation (prefixing a quote) was deliberately left out — it would
+// import as part of the invoicing app's own text field, corrupting the
+// data CSV exists to carry. Handle untrusted-CSV formula injection where
+// the file is opened, not here.
 function csvField(value) {
     let text = String(value);
-    if (!/[",\n]/.test(text))
+    if (!/[",\n\r]/.test(text))
         return text;
     return `"${text.replace(/"/g, '""')}"`;
 }

@@ -59,6 +59,43 @@ test('mergeSessions: the sum is rounded once, not per session', () => {
     assertEqual(rows[0].hours, 0.5);
 });
 
+test('mergeSessions: a single session landing exactly on a half-cent rounds up (1.005h -> 1.01)', () => {
+    // 1h 0m 18s = 3,618,000ms = 1.005h exactly. In binary floating point,
+    // 1.005 * 100 is actually ~100.49999999999999, so the old
+    // Math.round(hours * 100) / 100 gave 1.00 here, not 1.01.
+    let rows = mergeSessions([session({ endMs: 3618000 })], CLIENTS);
+    assertEqual(rows[0].hours, 1.01);
+});
+
+test('mergeSessions: the same half-cent boundary reached via three summed billed hours rounds the same way', () => {
+    // 0.335h * 3 = 1.005h, the same target as above, reached a different
+    // way. Summing imprecise float hours directly used to round this
+    // *upward* rather than downward like the single-session case above -
+    // an inconsistency, not just an off-by-a-cent error. Millisecond
+    // accumulation makes both land on the same 1.01.
+    let rows = mergeSessions([
+        session({ id: 'a', billedHours: 0.335 }),
+        session({ id: 'b', billedHours: 0.335 }),
+        session({ id: 'c', billedHours: 0.335 }),
+    ], CLIENTS);
+    assertEqual(rows[0].hours, 1.01);
+});
+
+test('mergeSessions: a sum landing on 2.675h rounds half-up to 2.68', () => {
+    let rows = mergeSessions([session({ billedHours: 2.675 })], CLIENTS);
+    assertEqual(rows[0].hours, 2.68);
+});
+
+test('mergeSessions: a sum landing on 0.125h rounds half-up to 0.13', () => {
+    let rows = mergeSessions([session({ billedHours: 0.125 })], CLIENTS);
+    assertEqual(rows[0].hours, 0.13);
+});
+
+test('mergeSessions: a billed override of 0.1h contributes exactly 0.10', () => {
+    let rows = mergeSessions([session({ billedHours: 0.1 })], CLIENTS);
+    assertEqual(rows[0].hours, 0.1);
+});
+
 test('mergeSessions: different days stay separate', () => {
     let rows = mergeSessions([
         session({ id: 'a', dayKey: '2026-09-11' }),
@@ -88,6 +125,15 @@ test('mergeSessions: a running session is excluded', () => {
     assertEqual(rows, []);
 });
 
+test('mergeSessions: a session with endMs before startMs is skipped (last line of defence)', () => {
+    // clockStore's load-time validation and update() both already refuse a
+    // record shaped like this, but mergeSessions must not rely on either -
+    // these rows are money, so a negative computed duration is dropped
+    // here too.
+    let rows = mergeSessions([session({ startMs: 3600000, endMs: 0 })], CLIENTS);
+    assertEqual(rows, []);
+});
+
 test('mergeSessions: re-export produces the same external_id', () => {
     let first = mergeSessions([session({ exportedAt: null })], CLIENTS);
     let again = mergeSessions([session({ exportedAt: 1757000000000 })], CLIENTS);
@@ -104,6 +150,24 @@ test('mergeSessions: rows are ordered by date then client', () => {
     assertEqual(rows.map(r => [r.date, r.client]), [
         ['2026-09-11', 'BETA'], ['2026-09-12', 'ACME'], ['2026-09-12', 'BETA'],
     ]);
+});
+
+test('mergeSessions: ordering is code-point, not locale-aware (case-sensitive)', () => {
+    // String.localeCompare collates via ICU and the running locale (and
+    // typically case-insensitively), so 'a' can sort before 'B' on one
+    // machine and after it on another. Rows upsert independently on
+    // external_id, so their order carries no meaning, but it must still be
+    // deterministic: plain code-point comparison always puts 'B' (0x42)
+    // before 'a' (0x61).
+    let clients = [
+        { name: 'B', active: true, billable: true },
+        { name: 'a', active: true, billable: true },
+    ];
+    let rows = mergeSessions([
+        session({ id: 'x', client: 'a' }),
+        session({ id: 'y', client: 'B' }),
+    ], clients);
+    assertEqual(rows.map(r => r.client), ['B', 'a']);
 });
 
 test('mergeSessions: a zeroed session still contributes 0 and yields a row', () => {
@@ -171,6 +235,18 @@ test('toCSV: a field with a comma, a double quote AND a newline is escaped as on
     assertEqual(dataLines.length, 4); // header, row line 1, row line 2, trailing ''
     assertEqual(dataLines[1] + '\n' + dataLines[2],
         'screen-time:ACME:2026-09-11,ACME,2026-09-11,2,"line one, ""quoted""\nline two"');
+});
+
+test('toCSV: a bare carriage return is escaped like a newline', () => {
+    // /[",\n]/ alone misses a lone \r (no accompanying \n); many CSV
+    // readers treat an unquoted \r as a row break just like \n.
+    let rows = [{
+        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME',
+        date: '2026-09-11', hours: 1, description: 'line one\rline two',
+    }];
+    let csv = toCSV(rows);
+    assertEqual(csv.split('\n')[1],
+        'screen-time:ACME:2026-09-11,ACME,2026-09-11,1,"line one\rline two"');
 });
 
 test('toCSV: a client name containing a comma is escaped', () => {
