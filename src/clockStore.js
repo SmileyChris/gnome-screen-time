@@ -16,12 +16,22 @@ function newId() {
     return GLib.uuid_string_random();
 }
 
-// Seconds a closed session contributes: the adjustment if one was made,
-// otherwise the time actually on the clock.
-function sessionSeconds(session, nowMs) {
+// Seconds a session contributes: the adjustment if one was made, otherwise
+// the time actually on the clock. `runningId` is the id `running` currently
+// returns; an open session that is not it is an anomaly (a hand edit, an
+// interrupted write, a stale record) rather than something the user can
+// still be billed for indefinitely, so it is clamped to its last known
+// heartbeat and logged rather than left to grow forever, silently.
+function sessionSeconds(session, nowMs, runningId) {
     if (session.billedHours !== null && session.billedHours !== undefined)
         return session.billedHours * 3600;
-    return ((session.endMs ?? nowMs) - session.startMs) / 1000;
+    if (session.endMs !== null)
+        return (session.endMs - session.startMs) / 1000;
+    if (session.id === runningId)
+        return (nowMs - session.startMs) / 1000;
+    console.error(`[ScreenTime] clock: stray open session ${session.id} (${session.client}) ` +
+        `is not the running one; clamped to its last heartbeat`);
+    return (session.lastSeenMs - session.startMs) / 1000;
 }
 
 export class ClockStore {
@@ -90,9 +100,11 @@ export class ClockStore {
         let current = this.running;
         if (current && current.client === client)
             return current;
-        if (current)
-            this._close(current, nowMs);
 
+        // Build the incoming session fully before mutating anything: if this
+        // throws (an out-of-range nowMs breaks dateKey(), say), the store is
+        // left exactly as it was rather than with the outgoing session
+        // closed and nothing to replace it.
         let session = {
             id: newId(),
             client,
@@ -107,6 +119,9 @@ export class ClockStore {
             cleanStop: false,
             exportedAt: null,
         };
+
+        if (current)
+            this._close(current, nowMs);
         this._sessions.push(session);
         this._changed();
         return session;
@@ -137,8 +152,9 @@ export class ClockStore {
     }
 
     billedSecondsForDay(dayKey, nowMs = Date.now()) {
+        let runningId = this.running?.id ?? null;
         return this.sessionsForDay(dayKey)
-            .reduce((sum, s) => sum + sessionSeconds(s, nowMs), 0);
+            .reduce((sum, s) => sum + sessionSeconds(s, nowMs, runningId), 0);
     }
 
     destroy() {
