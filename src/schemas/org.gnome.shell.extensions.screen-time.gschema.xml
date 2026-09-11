@@ -53,5 +53,15 @@
       <summary>Evidence retention days</summary>
       <description>How long the per-day activity timeline behind each clock session is kept. Sessions themselves are never deleted; past this many days a session keeps its hours but loses its breakdown. 0 keeps the timeline forever.</description>
     </key>
+    <key name="clients" type="a(sbb)">
+      <default>[]</default>
+      <summary>Clients available to the clock</summary>
+      <description>One entry per client: name, whether it is offered in the popup, and a third value that is no longer used (it was a billable flag, kept so stored lists still load). Every client on the list is exported.</description>
+    </key>
+    <key name="last-client" type="s">
+      <default>""</default>
+      <summary>Most recently clocked client</summary>
+      <description>Internal, not user-facing. What the popup's clock control and the keyboard shortcut start when no client is named.</description>
+    </key>
   </schema>
 </schemalist>
