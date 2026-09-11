@@ -751,9 +751,20 @@ export class ClockStore {
             .sort((a, b) => a.startMs - b.startMs);
     }
 
+    // Clamped to the session's own startMs: a backward step in the system
+    // clock (NTP correcting a fast clock, say) between this session's
+    // start() and whatever closes it - most reachably start()'s own
+    // same-instant switch to a different client - could otherwise write an
+    // endMs before its startMs. The next load() would then exclude the
+    // record as invalid and back the whole file up (see
+    // isValidSessionRecord()), for a session that was otherwise perfectly
+    // fine. Every _close() caller already passes a value that is either
+    // nowMs or the session's own already-valid lastSeenMs, so this only
+    // ever engages on that one clock-step scenario.
     _close(session, endMs) {
-        session.endMs = endMs;
-        session.lastSeenMs = endMs;
+        let clampedEndMs = Math.max(endMs, session.startMs);
+        session.endMs = clampedEndMs;
+        session.lastSeenMs = clampedEndMs;
     }
 
     sessionsForDay(dayKey) {

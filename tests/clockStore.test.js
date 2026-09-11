@@ -65,6 +65,22 @@ test('ClockStore: starting another client switches at the same instant', () => {
     clock.destroy();
 });
 
+test('ClockStore: switching clients after a backward clock step clamps the closed endMs to its own startMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    // The system clock stepped backward (an NTP correction, say) before the
+    // switch to BETA - closing ACME at an instant earlier than its own
+    // start would otherwise write a negative-duration record, which the
+    // next load() would exclude as invalid and back the whole file up for.
+    let earlier = t - 60000;
+    clock.start('BETA', earlier);
+    let closedAcme = clock.sessionById(first.id);
+    assertEqual(closedAcme.endMs, t, 'clamped forward to its own startMs, not the earlier switch instant');
+    assertEqual(closedAcme.lastSeenMs, t);
+    clock.destroy();
+});
+
 test('ClockStore: starting the client already running is a no-op', () => {
     let clock = freshClock();
     let t = at(2026, 9, 11, 9, 15);
@@ -673,9 +689,16 @@ test('ClockStore: recover keeps the freshest heartbeat running, not the latest s
     let day = clock.sessionsForDay('2026-09-11');
     let reloadedP = day.find(s => s.id === 'p');
     let reloadedR = day.find(s => s.id === 'r');
-    assertEqual(reloadedP.endMs, p.lastSeenMs, 'closed at its own heartbeat');
+    // p and r are each closed at their own lastSeenMs, EXCEPT that both are
+    // themselves already anomalous records (a heartbeat older than the
+    // session's own start - see openSession() above) of exactly the shape
+    // _close()'s M2 clamp exists to guard against: closing "at its own
+    // heartbeat" here still goes through that same clamp, landing on each
+    // one's own startMs rather than writing the invalid endMs < startMs a
+    // pre-clamp recover() would have.
+    assertEqual(reloadedP.endMs, p.startMs, 'clamped forward - its lastSeenMs predates its own start');
     assertEqual(reloadedP.interrupted, true);
-    assertEqual(reloadedR.endMs, r.lastSeenMs);
+    assertEqual(reloadedR.endMs, r.startMs, 'clamped the same way');
     assertEqual(reloadedR.interrupted, true);
     assertEqual(clock.running.id, 'q',
         'q has the freshest heartbeat even though it started first and sits mid-array');
