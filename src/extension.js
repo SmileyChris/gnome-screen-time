@@ -11,7 +11,7 @@ import { UsageTracker } from './usageTracker.js';
 import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
 import { migratePanelSetting, panelClockState } from './panelMode.js';
-import { nudgeDue } from './nudge.js';
+import { nudgeDue, awayMomentMs, awayNudgeDue } from './nudge.js';
 import { IntervalLog } from './intervalLog.js';
 import { LimitNotifier } from './limitNotifier.js';
 import { ClockNotifier } from './clockNotifier.js';
@@ -19,6 +19,27 @@ import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
 import { BrowserSource } from './browserSource.js';
 import { DbusService } from './dbusService.js';
 import { ClockDBus } from './clockDBus.js';
+
+// GNOME Shell caches an extension's ES modules for the life of the Shell
+// process, so module-scoped state survives a disable()/enable() cycle (a
+// lock, an idle blank, a suspend with lock-on-suspend - metadata.json
+// declares no session-modes, so GNOME Shell 50 disables this extension on
+// all three, verified against ui/extensionSystem.js's
+// _extensionSupportsSessionMode() and ui/screenShield.js's activate(),
+// which pushes the 'unlock-dialog' session mode) but dies with the process
+// itself - a crash, a real logout/login, `make reload` (a fresh dev UUID
+// means fresh module state), a reboot. That is exactly the distinction
+// ClockStore.recover()'s resumeId needs: non-null here means "the same
+// Shell process that was running this session a moment ago", so it is safe
+// to resume regardless of the gap; a different process always starts with
+// heldSessionId === null, and the ordinary gap rule applies unchanged.
+//
+// heldSessionId is the running session's id as of the last disable(), or
+// null; heldAwaySince mirrors the tracker's own away-since instant at that
+// same moment (0 if it had not yet noticed anything away). Both are read
+// and cleared at the start of the next enable() - see there.
+let heldSessionId = null;
+let heldAwaySince = 0;
 
 export default class ScreenTimeExtension extends Extension {
     enable() {
@@ -30,9 +51,42 @@ export default class ScreenTimeExtension extends Extension {
         // can actually be reported - nobody opens the Timesheet unprompted,
         // so "surfaced for review" would otherwise never be seen.
         this._notifier = new ClockNotifier(this._clock);
-        let interrupted = this._clock.recover();
+
+        // Read and cleared immediately, before recover() below mutates
+        // anything: a throw partway through enable() (see the try/catch it
+        // runs in) must never leave stale module state for a later
+        // enable() to misread - the next disable() sets these fresh from
+        // whatever is running by then regardless.
+        let resumeId = heldSessionId;
+        let awaySince = heldAwaySince;
+        heldSessionId = null;
+        heldAwaySince = 0;
+        // Read before recover() runs: recover() refreshes the resumed
+        // session's own lastSeenMs to `nowMs`, so this is the last chance
+        // to see what it was before that - the away-on-unlock nudge below
+        // needs that original value, not the just-refreshed one.
+        let heldLastSeenMs = resumeId ? this._clock.sessionById(resumeId)?.lastSeenMs ?? null : null;
+
+        let nowMs = Date.now();
+        let interrupted = this._clock.recover(nowMs, { resumeId });
         if (interrupted)
             this._notifier.notifyInterrupted(interrupted);
+
+        // Surfaces whatever a lock/idle-blank/suspend cost while this
+        // extension itself was disabled and could run no timer, no idle
+        // watch, nothing - the reachability the idle and suspend nudges
+        // lose in exactly that window. Only when a held session was
+        // actually resumed: recover() above always resumes it when
+        // resumeId names a session that was still open.
+        if (resumeId && heldLastSeenMs !== null) {
+            let resumed = this._clock.sessionById(resumeId);
+            if (resumed && resumed.endMs === null) {
+                let awayMoment = awayMomentMs(awaySince, heldLastSeenMs);
+                let minutes = this._settings.get_int('clock-nudge-minutes');
+                if (awayNudgeDue(awayMoment, nowMs, minutes))
+                    this._notifier.notifyAway(resumed, awayMoment, nowMs);
+            }
+        }
 
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
@@ -132,6 +186,31 @@ export default class ScreenTimeExtension extends Extension {
                 if (session && minutes > 0 && slept >= minutes * 60)
                     this._notifier?.notifyResume(session, Math.round(slept), sleptAt, wokeAt);
             });
+
+        // A real logout or full shutdown/reboot does NOT call disable() -
+        // only a session-mode change does (a lock, an idle blank, a suspend
+        // that locks), and none of those are a genuine end. `global`
+        // (Shell.Global) emits 'shutdown' at a real session end: verified
+        // against GNOME Shell 50's extracted ui/main.js, which connects to
+        // it twice at Shell startup (line ~242, tearing down the input
+        // method; line ~266, which blocks the whole shutdown in a nested
+        // GLib.MainLoop until an async task - flushing the time-limits
+        // history - finishes). That second handler is proof a 'shutdown'
+        // listener can reliably still run code before the process actually
+        // exits; this one is synchronous (closeForShutdown() just writes
+        // clock.json), so no such loop is needed here. ui/sessionMode.js
+        // defines only 'restrictive', 'gdm', 'unlock-dialog' and 'user' as
+        // session modes, and ui/endSessionDialog.js (the logout/shutdown
+        // confirmation dialog) never pushes one, so this extension stays
+        // enabled - and this handler stays connected - through the whole
+        // confirmation. This is the one chance to close the session cleanly
+        // before recover()'s fallback has to: the next login's recover()
+        // still closes it at its last heartbeat (at most 30s late) and
+        // marks it interrupted if this somehow doesn't fire in time.
+        this._shutdownId = global.connect('shutdown', () => {
+            this._clock?.closeForShutdown();
+            heldSessionId = null;
+        });
 
         // Registered last: if anything above throws, enable() aborts and the
         // extension is left in the ERROR state without disable() ever
@@ -237,6 +316,15 @@ export default class ScreenTimeExtension extends Extension {
             this._sleepId = null;
         }
         this._loginManager = null;
+        // Same reasoning as the suspend listener above: gone before
+        // this._clock is torn down, so a 'shutdown' arriving mid-teardown
+        // (unlikely, but not impossible if disable() itself runs as part of
+        // logout for some other reason) can never fire into a half-
+        // destroyed extension.
+        if (this._shutdownId) {
+            global.disconnect(this._shutdownId);
+            this._shutdownId = null;
+        }
         this._tracker?.destroy();      // destroys the registry and its sources
         this._tracker = null;
         this._dbus?.destroy();
@@ -248,20 +336,16 @@ export default class ScreenTimeExtension extends Extension {
         // whatever handler it finds at construction and restores exactly
         // that on destroy). Everything that closure reaches - indicator,
         // tracker, settings - is about to be torn down below, so clear it
-        // now: otherwise this._clock.destroy() below fires onChange one
-        // last time into a half-destroyed extension (this._indicator is
-        // already null by then), which throws and aborts both the rest of
-        // ClockStore.destroy() and the rest of disable() - leaking
-        // UsageStore's autosave timer and settings handlers on every
-        // logout/reload while a client is clocked in.
+        // now: release() below doesn't fire onChange itself (it saves via
+        // heartbeat(), not _changed()), but leaving a stale handler
+        // pointed at a half-destroyed extension is exactly the kind of
+        // ordering hazard this file guards against everywhere else.
         if (this._clock)
             this._clock.onChange = null;
         // Destroyed before the clock: destroying a resident notification's
-        // actions (Stop/Trim sleep) call into this._clock, so the notifier
-        // - and the buttons a user could still click - must be gone before
-        // ClockStore.destroy() below closes the running session and fires
-        // its own callbacks into an extension that is already half torn
-        // down.
+        // actions (Stop/Trim sleep, Stop/Trim away time) call into
+        // this._clock, so the notifier - and the buttons a user could
+        // still click - must be gone before this._clock is released below.
         this._notifier?.destroy();
         this._notifier = null;
         this._popup?.destroy();
@@ -272,7 +356,18 @@ export default class ScreenTimeExtension extends Extension {
         this._intervals?.destroy();
         this._intervals = null;
         Main.wm.removeKeybinding('toggle-clock');
-        this._clock?.destroy();
+        // release(), not destroy(): the clock keeps running through a lock,
+        // an idle blank and a suspend (all of which disable this extension
+        // - see the module-scoped heldSessionId comment at the top of this
+        // file), so disable() must never close the running session, only
+        // refresh its heartbeat and remember it for the next enable().
+        // heldAwaySince mirrors this._awaySince (0 if the tracker had not
+        // yet noticed anything away by now) for the away-on-unlock nudge.
+        if (this._clock) {
+            heldSessionId = this._clock.release(Date.now());
+            if (this._awaySince > 0)
+                heldAwaySince = this._awaySince;
+        }
         this._clock = null;
         this._store?.destroy();
         this._store = null;

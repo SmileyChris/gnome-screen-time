@@ -208,11 +208,89 @@ export class ClockNotifier {
             ]);
     }
 
+    // Surfaced once, on the enable() that follows a disable() which left a
+    // session running (a lock, an idle blank, or a suspend that disabled the
+    // extension - see extension.js's module-scoped heldSessionId): the
+    // reachability the idle and suspend nudges lose while the extension
+    // itself is disabled and cannot run a timer or listen for anything.
+    // `awaySinceMs` is the away-on-unlock moment (nudge.js's awayMomentMs),
+    // not "now" - billing every minute of the very away spell this notice
+    // exists to catch would defeat the point of it.
+    notifyAway(session, awaySinceMs, nowMs = Date.now()) {
+        let at = new Date(awaySinceMs).toTimeString().slice(0, 5);
+        let awaySeconds = Math.max(0, Math.round((nowMs - awaySinceMs) / 1000));
+        this._show(
+            `Still on the clock for ${session.client}`,
+            `Away for ${formatTime(awaySeconds)} while the extension was off (locked, blanked, ` +
+            'or asleep). The clock kept running.',
+            [
+                [`Stop at ${at}`, () => {
+                    if (!this._isStillRunning(session)) {
+                        console.debug('[ScreenTime] away nudge: Stop clicked after the ' +
+                            'clock already moved on; nothing to do');
+                        this._showFailure(`${session.client}'s clock has moved on`,
+                            "That session isn't running any more - nothing to stop here.");
+                        return;
+                    }
+                    try {
+                        this._clock.update(session.id, { endMs: awaySinceMs });
+                    } catch (e) {
+                        console.error(`[ScreenTime] away nudge: could not stop the clock ` +
+                            `at ${at}: ${e.message}`);
+                        this._showFailure(`Couldn't stop the clock for ${session.client}`,
+                            "Couldn't stop the clock automatically - stop it from the panel.");
+                        return;
+                    }
+                    this._active?.destroy();
+                }],
+                ['Trim away time', () => {
+                    if (!this._isStillRunning(session)) {
+                        console.debug('[ScreenTime] away nudge: Trim away time clicked after ' +
+                            'the clock already moved on; nothing to do');
+                        this._showFailure(`${session.client}'s clock has moved on`,
+                            "That session isn't running any more - nothing to trim here.");
+                        return;
+                    }
+                    let client = session.client;
+                    try {
+                        this._clock.update(session.id, { endMs: awaySinceMs });
+                    } catch (e) {
+                        console.error('[ScreenTime] away nudge: could not trim away time ' +
+                            `from the clock: ${e.message}`);
+                        this._showFailure(`Couldn't trim away time for ${client}`,
+                            'Couldn\'t trim away time from the clock automatically - stop it ' +
+                            'from the panel.');
+                        return;
+                    }
+                    try {
+                        this._clock.start(client, nowMs);
+                    } catch (e) {
+                        console.error('[ScreenTime] away nudge: away time was trimmed but ' +
+                            `the clock could not be restarted for ${client}: ${e.message}`);
+                        this._showFailure(`${client}'s clock wasn't restarted`,
+                            'Away time was trimmed, but the clock could not be restarted ' +
+                            'automatically - start it again from the panel.');
+                        return;
+                    }
+                    this._active?.destroy();
+                }],
+                ['Keep running', () => this._active?.destroy()],
+            ]);
+    }
+
+    // With this fix, the extension staying running through a lock/blank/
+    // suspend (and disable() no longer closing the session - see
+    // extension.js) means this is never what a lock looks like: it only
+    // fires when the Shell itself went away without a clean goodbye (a
+    // crash, or a real logout/shutdown whose 'shutdown' signal either
+    // didn't fire in time or wasn't connected - see extension.js's
+    // `global.connect('shutdown', ...)`), so it must not claim a crash
+    // specifically.
     notifyInterrupted(session) {
         let at = new Date(session.endMs).toTimeString().slice(0, 5);
         this._show(
             `Clock for ${session.client} stopped at ${at}`,
-            'The Shell went away while the clock was running. Check it in the Timesheet.',
+            'The session ended while the clock was running. Check it in the Timesheet.',
             [['Dismiss', () => this._active?.destroy()]]);
     }
 
