@@ -22,15 +22,6 @@ export default class ScreenTimeExtension extends Extension {
         this._clock = new ClockStore(this._settings);
         this._clock.recover();
 
-        // IGNORE_AUTOREPEAT so holding the keys cannot start and stop
-        // repeatedly; NORMAL | OVERVIEW so it works on the desktop and with
-        // Activities open.
-        Main.wm.addKeybinding(
-            'toggle-clock', this._settings,
-            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
-            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-            () => this._toggleClock());
-
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
         this._popup = new PopupWidget(this._indicator.menu, this._store,
@@ -65,6 +56,22 @@ export default class ScreenTimeExtension extends Extension {
         this._settings.connectObject(
             'changed::show-total-in-panel', () => this._syncPanelLabel(), this);
         this._syncPanelLabel();
+
+        // Registered last: if anything above throws, enable() aborts and the
+        // extension is left in the ERROR state without disable() ever
+        // running, so a grab taken earlier would stay registered - global
+        // and un-removable - until the Shell itself restarts. Registering
+        // only once everything else has succeeded means a failed enable()
+        // never leaves a dangling keybinding behind.
+        //
+        // IGNORE_AUTOREPEAT so holding the keys cannot start and stop
+        // repeatedly; NORMAL | OVERVIEW so it works on the desktop and with
+        // Activities open.
+        Main.wm.addKeybinding(
+            'toggle-clock', this._settings,
+            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            () => this._toggleClock());
     }
 
     _openTimesheet() {

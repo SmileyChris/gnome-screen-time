@@ -21,6 +21,7 @@ const FILES = [
     './intervalLog.test.js',
     './clockStore.test.js',
     './clients.test.js',
+    './accelerators.test.js',
     './activitySources.test.js',
     './browserSource.test.js',
     './rules.test.js',
