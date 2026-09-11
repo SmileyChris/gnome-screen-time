@@ -8,7 +8,7 @@ export class FakeSettings {
     constructor(ints = {}) {
         this._ints = {
             'retention-days': 90, 'max-interval': 300, 'day-start-hour': 0,
-            'interval-retention-days': 30, ...ints,
+            'interval-retention-days': 30, 'clock-nudge-minutes': 30, ...ints,
         };
         this._values = { clients: new GLib.Variant('a(sbb)', []) };
         this._strings = { 'last-client': '', 'panel-time': 'screen' };

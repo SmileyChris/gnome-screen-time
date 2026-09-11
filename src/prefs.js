@@ -212,6 +212,14 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         retentionGroup.add(retentionRow);
 
+        const evidenceRow = new Adw.SpinRow({
+            title: 'Evidence retention',
+            subtitle: 'Days to keep the activity timeline behind each clock session. Sessions themselves are never deleted. 0 keeps it forever.',
+            adjustment: new Gtk.Adjustment({ lower: 0, upper: 365, step_increment: 5 }),
+        });
+        settings.bind('interval-retention-days', evidenceRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        retentionGroup.add(evidenceRow);
+
         const historyGroup = new Adw.PreferencesGroup({
             title: 'History',
             description: `Total screen time over the last ${HISTORY_DAYS} days.`,
@@ -531,5 +539,13 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         clientsGroup.add(new ShortcutRow(
             settings, 'toggle-clock', 'Toggle the clock',
             'Stops the clock, or starts the client you used last.'));
+
+        const nudgeRow = new Adw.SpinRow({
+            title: 'Nudge when idle',
+            subtitle: 'Minutes idle on the clock before a notification offers to stop it. 0 disables it.',
+            adjustment: new Gtk.Adjustment({ lower: 0, upper: 480, step_increment: 5 }),
+        });
+        settings.bind('clock-nudge-minutes', nudgeRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        clientsGroup.add(nudgeRow);
     }
 }

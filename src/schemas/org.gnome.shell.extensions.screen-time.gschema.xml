@@ -83,5 +83,11 @@
       <summary>Panel setting migration marker</summary>
       <description>Internal, not user-facing. Set once panel-time has taken its value from the older show-total-in-panel boolean.</description>
     </key>
+    <key name="clock-nudge-minutes" type="i">
+      <default>30</default>
+      <range min="0" max="480"/>
+      <summary>Nudge after this long idle while clocked in</summary>
+      <description>The clock keeps running while you are away, so a notification offers to stop it after this many minutes without input. 0 disables the nudge.</description>
+    </key>
   </schema>
 </schemalist>

@@ -4,14 +4,17 @@ import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
 import { PanelIndicator } from './panelIndicator.js';
 import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
 import { migratePanelSetting, panelClockState } from './panelMode.js';
+import { nudgeDue } from './nudge.js';
 import { IntervalLog } from './intervalLog.js';
 import { LimitNotifier } from './limitNotifier.js';
+import { ClockNotifier } from './clockNotifier.js';
 import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
 import { BrowserSource } from './browserSource.js';
 import { DbusService } from './dbusService.js';
@@ -23,7 +26,13 @@ export default class ScreenTimeExtension extends Extension {
 
         this._store = new UsageStore(this._settings);
         this._clock = new ClockStore(this._settings);
-        this._clock.recover();
+        // Built before recover() runs, so a session left open by a crash
+        // can actually be reported - nobody opens the Timesheet unprompted,
+        // so "surfaced for review" would otherwise never be seen.
+        this._notifier = new ClockNotifier(this._clock, this._settings);
+        let interrupted = this._clock.recover();
+        if (interrupted)
+            this._notifier.notifyInterrupted(interrupted);
 
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
@@ -57,6 +66,7 @@ export default class ScreenTimeExtension extends Extension {
             () => {
                 this._clock.heartbeat();
                 this._syncPanelClock();
+                this._checkNudge();
                 return GLib.SOURCE_CONTINUE;
             });
 
@@ -68,7 +78,24 @@ export default class ScreenTimeExtension extends Extension {
         // Must be set before ClockDBus is constructed below - see the
         // comment there.
         this._clock.onChange = () => this._syncPanelClock();
-        this._tracker.onAway = () => this._syncPanelClock();
+        // 0 while not away; the instant UsageTracker first reported away,
+        // otherwise. `_onPrepareForSleep(true)` calls `_setAway(true)` even
+        // when the lock screen already made the tracker away, so onAway(true)
+        // can arrive twice in a row with no `false` between - only setting
+        // this when it is still 0 keeps a second such call from restarting
+        // the timer and pushing the nudge out by a whole threshold.
+        this._awaySince = 0;
+        this._nudgedAt = 0;
+        this._tracker.onAway = away => {
+            this._syncPanelClock();
+            if (away) {
+                if (this._awaySince === 0)
+                    this._awaySince = Date.now();
+            } else if (this._awaySince > 0) {
+                this._awaySince = 0;
+                this._nudgedAt = 0;
+            }
+        };
         this._syncPanelClock();
 
         // ClockDBus wraps clock.onChange, chaining through whatever handler
@@ -77,6 +104,34 @@ export default class ScreenTimeExtension extends Extension {
         // point silently replaces ClockDBus's wrapper, and ClockChanged
         // stops firing over D-Bus with no error anywhere.
         this._clockDbus = new ClockDBus(this._clock, this._intervals, this._settings);
+
+        // A second, independent prepare-for-sleep listener alongside
+        // UsageTracker's own (src/usageTracker.js:_onPrepareForSleep):
+        // reaching into the tracker's connection would couple this to its
+        // internals, so this mirrors its exact connect/disconnect pattern
+        // instead - plain connect()/disconnect(), not connectObject(), since
+        // nothing here guarantees LoginManager's object supports that.
+        this._loginManager = LoginManager.getLoginManager();
+        this._sleptAt = 0;
+        this._sleepId = this._loginManager.connect(
+            'prepare-for-sleep', (lm, aboutToSuspend) => {
+                if (aboutToSuspend) {
+                    this._sleptAt = Date.now();
+                    return;
+                }
+                // A `false` with no preceding `true` (a listener installed
+                // mid-suspend somehow) must not be treated as a real sleep.
+                if (this._sleptAt === 0)
+                    return;
+                let wokeAt = Date.now();
+                let sleptAt = this._sleptAt;
+                this._sleptAt = 0;
+                let session = this._clock.running;
+                let slept = (wokeAt - sleptAt) / 1000;
+                let minutes = this._settings.get_int('clock-nudge-minutes');
+                if (session && minutes > 0 && slept >= minutes * 60)
+                    this._notifier?.notifyResume(session, Math.round(slept), sleptAt, wokeAt);
+            });
 
         // Registered last: if anything above throws, enable() aborts and the
         // extension is left in the ERROR state without disable() ever
@@ -140,6 +195,22 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator.setMode(this._settings.get_string('panel-time'));
     }
 
+    // Fires once per idle spell, then hourly, by updating the same
+    // notification rather than stacking new ones - nudgeDue (src/nudge.js)
+    // holds the actual timing rule so it can be tested without the Shell.
+    _checkNudge() {
+        let session = this._clock.running;
+        if (!session)
+            return;
+        let minutes = this._settings.get_int('clock-nudge-minutes');
+        let now = Date.now();
+        if (!nudgeDue(this._awaySince, this._nudgedAt, now, minutes))
+            return;
+        this._nudgedAt = now;
+        this._notifier.notifyIdle(
+            session, Math.round((now - this._awaySince) / 1000), this._awaySince);
+    }
+
     // this._clock.onChange can still fire after this._indicator is gone -
     // see the comment in disable() on why that assignment is cleared there,
     // but guard here too, matching every other disable()-ordering hazard in
@@ -158,6 +229,14 @@ export default class ScreenTimeExtension extends Extension {
             GLib.source_remove(this._heartbeatId);
             this._heartbeatId = null;
         }
+        // Disconnected before anything the callback reaches (this._clock,
+        // this._notifier) is torn down below, so a suspend signal arriving
+        // mid-teardown can never fire into a half-destroyed extension.
+        if (this._sleepId) {
+            this._loginManager.disconnect(this._sleepId);
+            this._sleepId = null;
+        }
+        this._loginManager = null;
         this._tracker?.destroy();      // destroys the registry and its sources
         this._tracker = null;
         this._dbus?.destroy();
@@ -177,6 +256,14 @@ export default class ScreenTimeExtension extends Extension {
         // logout/reload while a client is clocked in.
         if (this._clock)
             this._clock.onChange = null;
+        // Destroyed before the clock: destroying a resident notification's
+        // actions (Stop/Trim sleep) call into this._clock, so the notifier
+        // - and the buttons a user could still click - must be gone before
+        // ClockStore.destroy() below closes the running session and fires
+        // its own callbacks into an extension that is already half torn
+        // down.
+        this._notifier?.destroy();
+        this._notifier = null;
         this._popup?.destroy();
         this._popup = null;
         this._indicator?.destroy();
