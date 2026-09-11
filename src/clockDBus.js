@@ -7,7 +7,11 @@ const OBJECT_PATH = '/org/gnome/Shell/Extensions/ScreenTime/Clock';
 // Payloads cross as JSON rather than as nested variants: the shapes here grow
 // with the feature, and a hand-maintained D-Bus signature on both sides of a
 // process boundary is a standing bug.
-const INTERFACE_XML = `
+//
+// Exported so the Timesheet window (timesheetWindow.js), a separate process,
+// builds its proxy from this same string instead of a pasted second copy -
+// a method added here then exists on both sides by construction.
+export const INTERFACE_XML = `
 <node>
   <interface name="org.gnome.Shell.Extensions.ScreenTime.Clock">
     <method name="GetClients">

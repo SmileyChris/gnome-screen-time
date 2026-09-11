@@ -1,3 +1,4 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
@@ -82,8 +83,17 @@ export default class ScreenTimeExtension extends Extension {
             () => this._toggleClock());
     }
 
+    // /usr/bin/gjs rather than bare `gjs`: a systemd user session's PATH is
+    // frequently minimal, which is the same trap the zellij lookup hits.
+    // Never wait() on this subprocess: it would block the compositor.
     _openTimesheet() {
-        console.log('[ScreenTime] timesheet window not implemented yet');
+        try {
+            Gio.Subprocess.new(
+                ['/usr/bin/gjs', '-m', GLib.build_filenamev([this.path, 'timesheet.js'])],
+                Gio.SubprocessFlags.NONE);
+        } catch (e) {
+            console.error(`[ScreenTime] could not launch the timesheet: ${e.message}`);
+        }
     }
 
     // Stops if running; otherwise starts the last client used. With no

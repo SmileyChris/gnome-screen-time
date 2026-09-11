@@ -428,6 +428,28 @@ export class PopupWidget {
             });
             row.add_child(undo);
         }
+        let timesheetBox = new St.BoxLayout();
+        timesheetBox.add_child(new St.Icon({
+            icon_name: 'x-office-spreadsheet-symbolic',
+            icon_size: 14,
+        }));
+        timesheetBox.add_child(new St.Label({
+            text: 'Timesheet',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 11px; padding-left: 4px;',
+        }));
+        let timesheetButton = new St.Button({
+            child: timesheetBox,
+            style_class: 'screen-time-nav-button',
+            can_focus: true,
+            style: 'margin-left: 8px;',
+        });
+        timesheetButton.connect('clicked', () => {
+            this._menu.close();
+            this._onOpenTimesheet?.();
+        });
+        row.add_child(timesheetButton);
+
         row.add_child(new St.BoxLayout({x_expand: true}));   // pushes the settings button right
 
         let btn = new St.Button({

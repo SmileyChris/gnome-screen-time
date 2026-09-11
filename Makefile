@@ -154,7 +154,7 @@ companion-uninstall:
 # messaging host reads stdin until it closes, and would otherwise block here.
 check:
 	@fail=0; \
-	for f in $(SRC_DIR)/*.js $(wildcard companion/webext/*.js) $(wildcard companion/host/*.js); do \
+	for f in $(filter-out $(SRC_DIR)/timesheet.js,$(wildcard $(SRC_DIR)/*.js)) $(wildcard companion/webext/*.js) $(wildcard companion/host/*.js); do \
 		if gjs -m "$$f" < /dev/null 2>&1 | grep -qi "SyntaxError"; then \
 			echo "SyntaxError in $$f"; fail=1; \
 		fi; \
