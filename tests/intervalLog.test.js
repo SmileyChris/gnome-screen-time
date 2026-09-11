@@ -224,3 +224,72 @@ test('IntervalLog: retention 0 keeps everything', () => {
     assertEqual(dayFileLines(GLib.DateTime.new_from_unix_local(old / 1000).format('%Y-%m-%d')).length, 1);
     log.destroy();
 });
+
+// Writes raw content to a day file, bypassing IntervalLog entirely, so a
+// crash mid-write or on-disk corruption can be simulated exactly.
+function writeDayFile(key, content) {
+    Gio.File.new_for_path(GLib.build_filenamev([INTERVAL_DIR, `${key}.ndjson`]))
+        .replace_contents(new TextEncoder().encode(content), null, false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+}
+
+test('IntervalLog: a truncated final line does not lose the earlier records', () => {
+    let log = freshLog();
+    let base = at(2026, 9, 11, 10);
+    // Mimics a crash mid-write_all: two complete lines, then a partial third.
+    let content = `${JSON.stringify([base, base + 30000, 'a', 'A'])}\n` +
+        `${JSON.stringify([base + 40000, base + 70000, 'b', 'B'])}\n` +
+        `[${base + 80000},9000`;
+    writeDayFile('2026-09-11', content);
+    let { seconds, entries } = log.query(base, base + 70000);
+    assertEqual(seconds, 60, 'both earlier records recovered despite the truncated tail');
+    assertEqual(entries.map(e => e.appId).sort(), ['a', 'b']);
+    log.destroy();
+});
+
+test('IntervalLog: a malformed line in the middle does not affect its neighbours', () => {
+    let log = freshLog();
+    let base = at(2026, 9, 11, 10);
+    let content = `${JSON.stringify([base, base + 30000, 'a', 'A'])}\n` +
+        `not json\n` +
+        `${JSON.stringify([base + 40000, base + 70000, 'b', 'B'])}\n`;
+    writeDayFile('2026-09-11', content);
+    let { seconds, entries } = log.query(base, base + 70000);
+    assertEqual(seconds, 60, 'the malformed middle line is skipped, not fatal to its neighbours');
+    assertEqual(entries.map(e => e.appId).sort(), ['a', 'b']);
+    log.destroy();
+});
+
+test('IntervalLog: rounding keeps a parent equal to the sum of its children on fractional windows', () => {
+    let log = freshLog();
+    let base = at(2026, 9, 11, 10);
+    log.record(base, base + 1000, ['kgx', 'a1'], ['Console', 'A1']);
+    log.record(base + 1000, base + 2000, ['kgx', 'a2'], ['Console', 'A2']);
+    log.flushAll();
+    // A window not aligned to whole seconds clips each record to 0.5s.
+    let { seconds, entries } = log.query(base + 500, base + 1500);
+    let kgx = entries.find(e => e.appId === 'kgx');
+    let children = sortedChildren(kgx.children);
+    let childSum = children.reduce((sum, c) => sum + c.seconds, 0);
+    assertEqual(kgx.seconds, childSum, 'parent equals the sum of its rounded children');
+    assertEqual(seconds, entries.reduce((sum, e) => sum + e.seconds, 0),
+        'the reported total equals the sum of the top-level entries');
+    log.destroy();
+});
+
+test('IntervalLog: a failed append keeps the batch buffered for retry', () => {
+    let log = freshLog();
+    let base = at(2026, 9, 11, 10);
+    let blockedPath = GLib.build_filenamev([INTERVAL_DIR, '2026-09-11.ndjson']);
+    // A directory at the day file's path makes append_to() throw, standing
+    // in for a disk error (full, permission, quota) without needing one.
+    Gio.File.new_for_path(blockedPath).make_directory_with_parents(null);
+    log.record(base, base + 30000, ['a'], ['A']);
+    log.record(base + 40000, base + 70000, ['b'], ['B']);
+    log.record(base + 80000, base + 110000, ['c'], ['C']);
+    log.flushAll();
+    Gio.File.new_for_path(blockedPath).delete(null);
+    log.flushAll();
+    assertEqual(dayFileLines('2026-09-11').length, 3, 'the failed write did not lose the batch');
+    log.destroy();
+});

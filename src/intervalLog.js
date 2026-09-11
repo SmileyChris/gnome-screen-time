@@ -54,6 +54,13 @@ export const INTERVAL_DIR = GLib.build_filenamev([
 // extended by the next emit, and the one before it may still absorb a stub.
 const TAIL_HELD = 2;
 
+// A failed append (disk full, permission, quota) leaves its batch buffered
+// to retry, and new records keep arriving in the meantime. This cap is
+// deliberate, not incidental: it bounds how much memory a stuck disk can
+// consume inside the compositor process, at the cost of the oldest evidence
+// once retries have clearly stopped working.
+const MAX_BUFFERED = 20000;
+
 // One JSON array per line. Trailing nulls are dropped so an app-only record
 // is four elements rather than eight.
 function encodeLine(rec) {
@@ -121,15 +128,20 @@ export class IntervalLog {
 
     // Appends `count` records from the front of the buffer, grouped by day
     // file so a run of records costs one append per file, not one per record.
+    // The batch is only removed from the buffer once every day's append has
+    // succeeded: a disk error must not lose records that exist nowhere else,
+    // so a failed write leaves the whole batch buffered to retry on the next
+    // flush.
     _writeOut(count) {
         if (count <= 0)
             return;
-        let batch = this._buf.splice(0, count);
+        let batch = this._buf.slice(0, count);
         let byDay = new Map();
         for (let rec of batch) {
             let key = this._keyFor(rec.s);
             byDay.set(key, (byDay.get(key) ?? '') + encodeLine(rec));
         }
+        let ok = true;
         for (let [key, text] of byDay) {
             try {
                 let stream = this._fileFor(key).append_to(
@@ -138,15 +150,24 @@ export class IntervalLog {
                 stream.close(null);
             } catch (e) {
                 console.error(`[ScreenTime] interval append failed: ${e.message}`);
+                ok = false;
             }
         }
+        if (!ok) {
+            if (this._buf.length > MAX_BUFFERED) {
+                let drop = this._buf.length - MAX_BUFFERED;
+                this._buf.splice(0, drop);
+                console.error(`[ScreenTime] interval buffer over cap, dropped ${drop} oldest records`);
+            }
+            return;
+        }
+        this._buf.splice(0, count);
     }
 
     // Every stored record overlapping [fromMs, toMs], clipped to it, folded
     // into the same tree shape UsageStore.getUsageForDate returns.
     query(fromMs, toMs) {
         let root = {};
-        let total = 0;
         for (let key of this._keysInRange(fromMs, toMs)) {
             for (let row of this._readDay(key)) {
                 let rec = decodeLine(row);
@@ -155,13 +176,12 @@ export class IntervalLog {
                 if (e <= s)
                     continue;
                 let secs = (e - s) / 1000;
-                total += secs;
                 this._credit(root, rec, secs);
             }
         }
-        // Clipping produces fractional seconds; round once the whole tree is
-        // built so a parent still reads as the sum of what is under it.
-        roundNodes(root);
+        // Clipping produces fractional seconds; round bottom-up so a parent
+        // still reads as the sum of what is under it.
+        let roundedTotal = roundNodes(root);
         let entries = Object.entries(root)
             .map(([appId, node]) => ({
                 appId,
@@ -170,7 +190,7 @@ export class IntervalLog {
                 children: node.children ?? null,
             }))
             .sort((a, b) => b.seconds - a.seconds);
-        return { seconds: Math.round(total), entries };
+        return { seconds: roundedTotal, entries };
     }
 
     _credit(root, rec, secs) {
@@ -205,18 +225,30 @@ export class IntervalLog {
         return keys;
     }
 
+    // Parses each line independently: a crash mid-write leaves a truncated
+    // or otherwise malformed final line, and that must not cost the rest of
+    // the day's evidence. Only the bad line is skipped.
     _readDay(key) {
         let file = this._fileFor(key);
         if (!file.query_exists(null))
             return [];
+        let lines;
         try {
             let [, contents] = file.load_contents(null);
-            return new TextDecoder().decode(contents)
-                .split('\n').filter(l => l.length > 0).map(l => JSON.parse(l));
+            lines = new TextDecoder().decode(contents).split('\n').filter(l => l.length > 0);
         } catch (e) {
             console.error(`[ScreenTime] interval read failed for ${key}: ${e.message}`);
             return [];
         }
+        let rows = [];
+        for (let line of lines) {
+            try {
+                rows.push(JSON.parse(line));
+            } catch (e) {
+                console.error(`[ScreenTime] interval line skipped in ${key}: ${e.message}`);
+            }
+        }
+        return rows;
     }
 
     purge() {
@@ -250,11 +282,22 @@ export class IntervalLog {
     }
 }
 
-// Rounds every node in a `{ id: { seconds, children } }` tree, in place.
+// Rounds a `{ id: { seconds, children } }` tree bottom-up and returns the
+// rounded total of `siblings`. A parent becomes the sum of its rounded
+// children plus its own rounded direct time, so the tree stays internally
+// consistent. Rounding each node independently does not: two 0.5s children
+// each round to 1 under a parent that also rounds to 1.
 function roundNodes(siblings) {
+    let rounded = 0;
     for (let node of Object.values(siblings)) {
-        node.seconds = Math.round(node.seconds);
-        if (node.children)
-            roundNodes(node.children);
+        // Taken before the recursive call, which overwrites child seconds.
+        let rawChildren = node.children
+            ? Object.values(node.children).reduce((sum, c) => sum + c.seconds, 0)
+            : 0;
+        let own = Math.max(0, node.seconds - rawChildren);
+        let roundedChildren = node.children ? roundNodes(node.children) : 0;
+        node.seconds = roundedChildren + Math.round(own);
+        rounded += node.seconds;
     }
+    return rounded;
 }
