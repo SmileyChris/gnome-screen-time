@@ -2,7 +2,10 @@
 // `changed::<key>` signals that a test can fire by hand.
 export class FakeSettings {
     constructor(ints = {}) {
-        this._ints = { 'retention-days': 90, 'max-interval': 300, 'day-start-hour': 0, ...ints };
+        this._ints = {
+            'retention-days': 90, 'max-interval': 300, 'day-start-hour': 0,
+            'interval-retention-days': 30, ...ints,
+        };
         this._handlers = new Map();
         this._nextId = 1;
     }
