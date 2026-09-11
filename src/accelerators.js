@@ -7,26 +7,32 @@ import Gtk from 'gi://Gtk?version=4.0';
 // plain-keysym navigation key is paired with its keypad duplicate (the
 // keysym a numlock-off keypad press actually generates), since a raw keycode
 // check on the plain keysym alone lets the keypad equivalent straight
-// through.
+// through. BackSpace and Delete also happen to fail the printable-character
+// check below on their own (Gdk.keyval_to_unicode() returns their C0
+// control code, which is nonzero) - listed explicitly anyway, alongside
+// Insert (which returns 0 and is genuinely not caught otherwise), rather
+// than depend on that coincidence holding across GDK versions.
 const FORBIDDEN = [
     Gdk.KEY_Home, Gdk.KEY_Left, Gdk.KEY_Up, Gdk.KEY_Right, Gdk.KEY_Down,
     Gdk.KEY_Page_Up, Gdk.KEY_Page_Down, Gdk.KEY_End, Gdk.KEY_Tab,
     Gdk.KEY_KP_Enter, Gdk.KEY_Return, Gdk.KEY_Mode_switch,
     Gdk.KEY_KP_Home, Gdk.KEY_KP_Left, Gdk.KEY_KP_Up, Gdk.KEY_KP_Right,
     Gdk.KEY_KP_Down, Gdk.KEY_KP_Page_Up, Gdk.KEY_KP_Page_Down, Gdk.KEY_KP_End,
-    Gdk.KEY_KP_Tab,
+    Gdk.KEY_KP_Tab, Gdk.KEY_BackSpace, Gdk.KEY_Delete, Gdk.KEY_Insert,
 ];
 
-// Letters, digits (both rows and keypad), space and the FORBIDDEN set above
-// are unsafe to bind with no real modifier: typing them, selecting text, or
-// navigating a text field would instead fire the shortcut.
+// Anything that produces a printable character - letters in any script (not
+// just a-z/A-Z: Cyrillic, Greek, ä, é and friends all type into whatever
+// field has focus exactly like a Latin letter does), digits (both rows and
+// keypad), space, and ordinary punctuation/symbols (`.` `,` `-` `/` `;` `'`
+// `!` `?` and the rest) - plus the FORBIDDEN navigation/editing set above,
+// which produce no character of their own but are just as unsafe bare. Using
+// Gdk.keyval_to_unicode() here, rather than hand-listing ranges the way an
+// earlier version of this function did, is what makes the non-Latin and
+// punctuation cases refused at all: a keysym range check only ever covered
+// the ASCII keys it was written against.
 function isUnsafeUnmodified(keyval) {
-    return (keyval >= Gdk.KEY_a && keyval <= Gdk.KEY_z) ||
-           (keyval >= Gdk.KEY_A && keyval <= Gdk.KEY_Z) ||
-           (keyval >= Gdk.KEY_0 && keyval <= Gdk.KEY_9) ||
-           (keyval >= Gdk.KEY_KP_0 && keyval <= Gdk.KEY_KP_9) ||
-           keyval === Gdk.KEY_space ||
-           FORBIDDEN.includes(keyval);
+    return Gdk.keyval_to_unicode(keyval) !== 0 || FORBIDDEN.includes(keyval);
 }
 
 // Whether `mask` + `keyval` is safe to register as a global shortcut. Two

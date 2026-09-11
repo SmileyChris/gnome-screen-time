@@ -52,3 +52,35 @@ accepted('Ctrl+Shift+T', CTRL | SHIFT, Gdk.KEY_t);
 // Bare function keys are a deliberate exception: GNOME's own shortcut editor
 // and default media-key bindings use unmodified keys like these.
 accepted('a bare F5', 0, Gdk.KEY_F5);
+
+// Bare punctuation and symbol keys: each produces a printable character
+// (Gdk.keyval_to_unicode() !== 0) and would type into whatever field has
+// focus exactly like a letter would.
+refused('a bare period', 0, Gdk.KEY_period);
+refused('a bare comma', 0, Gdk.KEY_comma);
+refused('a bare minus', 0, Gdk.KEY_minus);
+refused('a bare slash', 0, Gdk.KEY_slash);
+refused('a bare semicolon', 0, Gdk.KEY_semicolon);
+refused('a bare apostrophe', 0, Gdk.KEY_apostrophe);
+refused('Shift+exclam (!)', SHIFT, Gdk.KEY_exclam);
+refused('Shift+question (?)', SHIFT, Gdk.KEY_question);
+
+// Bare editing keys: BackSpace and Delete happen to also fail the
+// printable-character check (their C0 control codes are nonzero), but
+// Insert does not (Gdk.keyval_to_unicode() returns 0 for it) - all three
+// are refused via the explicit FORBIDDEN entries either way.
+refused('a bare BackSpace', 0, Gdk.KEY_BackSpace);
+refused('a bare Delete', 0, Gdk.KEY_Delete);
+refused('a bare Insert', 0, Gdk.KEY_Insert);
+
+// Bare non-Latin letters: the old range check (a-z/A-Z only) let every one
+// of these straight through.
+refused('a bare Cyrillic letter', 0, Gdk.KEY_Cyrillic_a);
+refused('a bare Greek letter', 0, Gdk.KEY_Greek_alpha);
+refused('a bare a-umlaut (ä)', 0, Gdk.KEY_adiaeresis);
+refused('a bare e-acute (é)', 0, Gdk.KEY_eacute);
+
+// Bare media keys are a deliberate exception, same as function keys: they
+// produce no character (Gdk.keyval_to_unicode() === 0) and GNOME's default
+// bindings use them unmodified.
+accepted('a bare media key (AudioPlay)', 0, Gdk.KEY_AudioPlay);
