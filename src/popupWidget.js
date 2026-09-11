@@ -5,6 +5,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
+import { ClockSection } from './clockSection.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow } from './usageRows.js';
 
@@ -61,13 +62,18 @@ function labelForKey(key, startHour) {
 }
 
 export class PopupWidget {
-    constructor(menu, store, settings, openPrefs) {
+    constructor(menu, store, settings, openPrefs, clock, onOpenTimesheet) {
         this._menu = menu;
         this._store = store;
         this._settings = settings;
         this._openPrefs = openPrefs;
+        // Stored, not just passed through: the footer button and the split
+        // card (later tasks) both read these back off `this`.
+        this._clock = clock;
+        this._onOpenTimesheet = onOpenTimesheet;
         this._date = todayKeyFor(settings);
         this._timerSection = new AppTimerSection(store, settings);
+        this._clockSection = new ClockSection(clock, settings);
         // Paths (joined with \0) whose rows are expanded, so a rebuild after
         // an edit lands where the user was. Cleared on reopen and date change.
         this._expanded = new Set();
@@ -78,6 +84,12 @@ export class PopupWidget {
         this._openId = this._menu.connect('open-state-changed', (m, open) => {
             if (open) this._refresh();
         });
+    }
+
+    // The shortcut and the panel can change the clock without the popup being
+    // open; this is how they ask it to redraw.
+    refresh() {
+        this._build();
     }
 
     _refresh() {
@@ -129,6 +141,12 @@ export class PopupWidget {
         }
 
         this._addSeparator();
+        // The clock rows are a live control showing today's hours, so they sit
+        // under today's breakdown only; paging back to an earlier day hides them
+        // rather than mixing two days under one date heading.
+        if (this._date === todayKeyFor(this._settings) &&
+            this._clockSection.build(this._menu, () => this._build()))
+            this._addSeparator();
         this._timerSection.build(this._menu, () => this._build());
         if (this._timerSection.isOpen)
             this._addSeparator();
@@ -435,10 +453,14 @@ export class PopupWidget {
             this._menu.disconnect(this._openId);
             this._openId = null;
         }
+        this._clockSection?.destroy();
+        this._clockSection = null;
         this._menu = null;
         this._store = null;
         this._settings = null;
         this._openPrefs = null;
+        this._clock = null;
+        this._onOpenTimesheet = null;
         this._timerSection = null;
     }
 }

@@ -167,6 +167,60 @@ test('ClockStore: billedSecondsForDay clamps a stray open session to its lastSee
     clock.destroy();
 });
 
+test('ClockStore: billedSecondsByClient sums seconds per client across sessions', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.start('BETA', t + 3600000);      // closes ACME after 1h, opens BETA
+    clock.start('ACME', t + 5400000);      // closes BETA after 30m, reopens ACME
+    clock.stop(t + 9000000);               // closes ACME after another 1h
+    let byClient = clock.billedSecondsByClient('2026-09-11', t + 9000000);
+    assertEqual(Object.fromEntries(byClient), { ACME: 7200, BETA: 1800 },
+        'ACME totals its two sessions; BETA its one');
+    clock.destroy();
+});
+
+test('ClockStore: billedSecondsByClient honours a billedHours override per client, including zero', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let acme = clock.start('ACME', t);
+    clock.stop(t + 3600000);               // 1h actual
+    let beta = clock.start('BETA', t + 3600000);
+    clock.stop(t + 7200000);               // 1h actual
+    clock.update(acme.id, { billedHours: 2 });
+    clock.update(beta.id, { billedHours: 0 });
+    let byClient = clock.billedSecondsByClient('2026-09-11', t + 7200000);
+    assertEqual(Object.fromEntries(byClient), { ACME: 7200, BETA: 0 },
+        'the adjustment replaces actual time, and an explicit zero bills nothing');
+    clock.destroy();
+});
+
+test('ClockStore: billedSecondsByClient accrues the running session live to nowMs', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.start('BETA', t + 3600000);      // still running
+    let byClient = clock.billedSecondsByClient('2026-09-11', t + 5400000);
+    assertEqual(Object.fromEntries(byClient), { ACME: 3600, BETA: 1800 },
+        'BETA is still open and accrues to the given nowMs');
+    clock.destroy();
+});
+
+test('ClockStore: billedSecondsByClient sums to the same total as billedSecondsForDay', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.start('BETA', t + 3600000);
+    clock.start('ACME', t + 5400000);      // left running
+    let nowMs = t + 9000000;
+    let byClient = clock.billedSecondsByClient('2026-09-11', nowMs);
+    let sum = [...byClient.values()].reduce((s, v) => s + v, 0);
+    assertEqual(sum, clock.billedSecondsForDay('2026-09-11', nowMs),
+        'per-client rows and the day total must never disagree');
+    clock.destroy();
+});
+
 test('ClockStore: heartbeat advances lastSeenMs and persists it', () => {
     let settings = new FakeSettings();
     let clock = freshClock(settings);

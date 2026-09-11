@@ -1,8 +1,10 @@
+import GLib from 'gi://GLib';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { PanelIndicator } from './panelIndicator.js';
 import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore } from './usageStore.js';
+import { ClockStore } from './clockStore.js';
 import { IntervalLog } from './intervalLog.js';
 import { LimitNotifier } from './limitNotifier.js';
 import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
@@ -14,10 +16,13 @@ export default class ScreenTimeExtension extends Extension {
         this._settings = this.getSettings();
 
         this._store = new UsageStore(this._settings);
+        this._clock = new ClockStore(this._settings);
+        this._clock.recover();
         this._indicator = new PanelIndicator();
         this._indicator.addToPanel(this.uuid);
         this._popup = new PopupWidget(this._indicator.menu, this._store,
-            this._settings, () => this._openPrefs());
+            this._settings, () => this._openPrefs(), this._clock,
+            () => this._openTimesheet());
 
         // The browser companion pushes into this source over D-Bus; the same
         // instance sits in the registry the tracker reads from.
@@ -40,9 +45,17 @@ export default class ScreenTimeExtension extends Extension {
         };
         this._indicator.setTotal(this._store.getTodayTotal());
 
+        this._heartbeatId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT, 30,
+            () => { this._clock.heartbeat(); return GLib.SOURCE_CONTINUE; });
+
         this._settings.connectObject(
             'changed::show-total-in-panel', () => this._syncPanelLabel(), this);
         this._syncPanelLabel();
+    }
+
+    _openTimesheet() {
+        console.log('[ScreenTime] timesheet window not implemented yet');
     }
 
     // The Shell refuses a second preferences dialog while one is showing, so
@@ -66,6 +79,10 @@ export default class ScreenTimeExtension extends Extension {
 
     disable() {
         this._settings.disconnectObject(this);
+        if (this._heartbeatId) {
+            GLib.source_remove(this._heartbeatId);
+            this._heartbeatId = null;
+        }
         this._tracker?.destroy();      // destroys the registry and its sources
         this._tracker = null;
         this._dbus?.destroy();
@@ -77,6 +94,8 @@ export default class ScreenTimeExtension extends Extension {
         this._limitNotifier = null;
         this._intervals?.destroy();
         this._intervals = null;
+        this._clock?.destroy();
+        this._clock = null;
         this._store?.destroy();
         this._store = null;
         this._settings = null;

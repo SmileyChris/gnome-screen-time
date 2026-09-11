@@ -306,6 +306,18 @@ export class ClockStore {
             .reduce((sum, s) => sum + this._sessionSeconds(s, nowMs, runningId), 0);
     }
 
+    // Today's billed seconds per client, by the same rule as
+    // billedSecondsForDay, so a row and the day total can never disagree.
+    billedSecondsByClient(dayKey, nowMs = Date.now()) {
+        let runningId = this.running?.id ?? null;
+        let byClient = new Map();
+        for (let session of this.sessionsForDay(dayKey)) {
+            let seconds = this._sessionSeconds(session, nowMs, runningId);
+            byClient.set(session.client, (byClient.get(session.client) ?? 0) + seconds);
+        }
+        return byClient;
+    }
+
     // Drops the store without closing the running session, which is what a
     // crash looks like on disk. destroy() is the clean path.
     destroySilently() {
