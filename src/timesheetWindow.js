@@ -37,6 +37,37 @@ function clockOf(ms) {
     return GLib.DateTime.new_from_unix_local(ms / 1000).format('%H:%M');
 }
 
+// How often _tickLive() (see there) recomputes a running session's figures
+// locally. Independent of the clock's own 30s heartbeat in the Shell - that
+// one never fires ClockChanged (see the comments on _timeRow and
+// _draftFor), so it cannot be relied on to keep anything in this window
+// current.
+const LIVE_TICK_SECONDS = 30;
+
+// The subtitle text for a session row: its start-end clock times, its
+// hours, and any interrupted/cleanStop/exported markers. Factored out of
+// _sessionRow so _tickLive() can recompute it for a still-running session
+// without rebuilding the row - actualHoursOf()/hoursOf() already read
+// Date.now() fresh on every call; something just has to call them again
+// and push the result into the widget that's already on screen.
+function sessionSubtitle(session) {
+    let end = session.endMs === null ? 'now' : clockOf(session.endMs);
+    let actual = actualHoursOf(session);
+    let billed = hoursOf(session);
+    let subtitle = `${clockOf(session.startMs)}–${end}`;
+    if (hasBilledHours(session))
+        subtitle += `   ${billed.toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
+    else
+        subtitle += `   ${actual.toFixed(2)} h`;
+    if (session.interrupted)
+        subtitle += '   · interrupted';
+    else if (session.cleanStop)
+        subtitle += '   · stopped at shutdown';
+    if (session.exportedAt)
+        subtitle += '   · exported';
+    return subtitle;
+}
+
 // Decimal hours for anything being billed; h/m for anything being read.
 // Rounds to whole minutes first, then derives hours and minutes from that
 // total - rounding each of h and m independently let 3599s print as "60m"
@@ -128,6 +159,24 @@ export class TimesheetWindow {
         // _expandedIds carries which rows should come back open.
         this._drafts = new Map();
         this._expandedIds = new Set();
+        // session id -> live-row bookkeeping for _tickLive(), rebuilt by
+        // refresh() on every pass (see there) since the rows themselves are
+        // rebuilt too. Ticked on its own timer, independent of ClockChanged
+        // and the D-Bus proxy entirely, so it still does something useful
+        // (nothing, on an empty map) even when proxyError is set below.
+        this._liveRows = new Map();
+        this._liveTimerId = GLib.timeout_add_seconds(
+            GLib.PRIORITY_DEFAULT, LIVE_TICK_SECONDS, () => {
+                this._tickLive();
+                return GLib.SOURCE_CONTINUE;
+            });
+        this.window.connect('close-request', () => {
+            if (this._liveTimerId) {
+                GLib.source_remove(this._liveTimerId);
+                this._liveTimerId = null;
+            }
+            return false;
+        });
         if (proxyError) {
             this._showError(`Could not reach the extension: ${proxyError.message}`);
             return;
@@ -247,6 +296,11 @@ export class TimesheetWindow {
         try {
             for (let group of this._groups.splice(0))
                 this._page.remove(group);
+            // Every row is about to be rebuilt from scratch (below), so any
+            // live-row bookkeeping from the previous pass points at widgets
+            // that no longer exist - _sessionRow()/_adjustRows() repopulate
+            // this for whatever is still running.
+            this._liveRows.clear();
 
             let to = Date.now();
             let from = to - 30 * 24 * 3600 * 1000;
@@ -318,34 +372,34 @@ export class TimesheetWindow {
         }
     }
 
+    // cleanStop is set only by ClockStore.closeForShutdown(), which now
+    // runs only from the `global` 'shutdown' handler in extension.js (a
+    // real logout or full shutdown/reboot) - never from a lock, an idle
+    // blank or a suspend, which leave the session open instead (see
+    // ClockStore.release()). "interrupted" covers what's left: the Shell
+    // went away with no clean goodbye at all - a crash, or a logout/
+    // shutdown whose 'shutdown' handler didn't run in time.
     _sessionRow(session) {
-        let end = session.endMs === null ? 'now' : clockOf(session.endMs);
-        let actual = actualHoursOf(session);
-        let billed = hoursOf(session);
-        let subtitle = `${clockOf(session.startMs)}–${end}`;
-        if (hasBilledHours(session))
-            subtitle += `   ${billed.toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
-        else
-            subtitle += `   ${actual.toFixed(2)} h`;
-        // cleanStop is set only by ClockStore.closeForShutdown(), which now
-        // runs only from the `global` 'shutdown' handler in extension.js
-        // (a real logout or full shutdown/reboot) - never from a lock, an
-        // idle blank or a suspend, which leave the session open instead
-        // (see ClockStore.release()). "interrupted" covers what's left:
-        // the Shell went away with no clean goodbye at all - a crash, or a
-        // logout/shutdown whose 'shutdown' handler didn't run in time.
-        if (session.interrupted)
-            subtitle += '   · interrupted';
-        else if (session.cleanStop)
-            subtitle += '   · stopped at shutdown';
-        if (session.exportedAt)
-            subtitle += '   · exported';
-
         let row = new Adw.ExpanderRow({
             title: session.client,
-            subtitle,
+            subtitle: sessionSubtitle(session),
             css_classes: session.exportedAt ? ['dim-label'] : [],
         });
+
+        // Bookkeeping for _tickLive(): only a still-running session's
+        // figures go stale between refreshes (nothing mutates the clock
+        // just because time passes, so nothing fires ClockChanged to
+        // trigger a refresh() on its own), so only these get an entry.
+        // hoursRow/hours/draft start null and are filled in by
+        // _fillEvidence()/_adjustRows() below once the row is actually
+        // expanded - until then there is nothing more for a tick to
+        // update than the subtitle already covers.
+        let live = null;
+        if (session.endMs === null) {
+            live = { session, row, hoursRow: null, hours: null, draft: null };
+            this._liveRows.set(session.id, live);
+        }
+
         // Evidence is fetched on expand, not up front: a month of sessions
         // would otherwise mean a month of range queries to draw one list.
         let loaded = false;
@@ -357,7 +411,7 @@ export class TimesheetWindow {
             if (!row.expanded || loaded)
                 return;
             loaded = true;
-            this._fillEvidence(row, session);
+            this._fillEvidence(row, session, live);
         });
         // refresh() rebuilds this row from scratch, so a row the user had
         // open is re-expanded here rather than coming back collapsed -
@@ -368,7 +422,7 @@ export class TimesheetWindow {
         return row;
     }
 
-    _fillEvidence(row, session) {
+    _fillEvidence(row, session, live) {
         let evidence;
         try {
             let [json] = this._proxy.GetEvidenceSync(session.id);
@@ -401,12 +455,14 @@ export class TimesheetWindow {
         // the Note/Bill fields in _adjustRows, so all five widgets agree on
         // what the user has and hasn't touched yet.
         let draft = this._draftFor(session, evidence);
+        if (live)
+            live.draft = draft;
 
         row.add_row(this._timeRow(session, evidence, draft, 'start'));
         if (session.endMs !== null)
             row.add_row(this._timeRow(session, evidence, draft, 'end'));
 
-        for (let adjustRow of this._adjustRows(session, evidence, draft))
+        for (let adjustRow of this._adjustRows(session, evidence, draft, live))
             row.add_row(adjustRow);
     }
 
@@ -416,8 +472,11 @@ export class TimesheetWindow {
     // Backed by `draft` (see _draftFor) rather than the session directly:
     // text the user has typed but not yet applied (no Enter pressed yet)
     // must survive a refresh the same way the Note field's unsaved text
-    // does, since ClockChanged - now also fired by the periodic heartbeat -
-    // can rebuild this row at any time.
+    // does, since ClockChanged - fired by Save, "Use actual", or any other
+    // client mutating the clock, including from the panel or the Shell's
+    // own toggle-clock shortcut, but NOT by the clock's own 30s heartbeat,
+    // which never touches onChange at all - can rebuild this row at any
+    // time.
     _timeRow(session, evidence, draft, which) {
         let draftKey = which === 'start' ? 'start' : 'end';
         let dirtyKey = which === 'start' ? 'startDirty' : 'endDirty';
@@ -532,16 +591,22 @@ export class TimesheetWindow {
     //
     // A draft is created empty on a row's first expansion and would
     // otherwise keep whatever it was first seeded with forever: refresh()
-    // rebuilds this row from scratch on every ClockChanged - which now
-    // fires on every Save, "Use actual", and a periodic heartbeat tick
-    // anywhere in the window - and an untouched field must track the
-    // session, not freeze at its first-render value. Left unfixed, this
-    // mis-bills a running session: expand it at 1.0 h, leave the row open
-    // while the clock runs to 2.0 h, press +1/4, and a frozen draft sends
-    // 1.25 instead of 2.25. A field the user HAS edited (its dirty flag is
-    // true) is left alone - that's an in-progress edit, not something to
-    // overwrite - and clearing dirty on a successful save is exactly what
-    // hands the field back to being re-seeded here.
+    // rebuilds this row from scratch on every ClockChanged - fired on every
+    // Save, "Use actual", and any other client mutating the clock, but
+    // never by the clock's own 30s heartbeat, which does not touch
+    // onChange - and an untouched field must track the session, not freeze
+    // at its first-render value. That alone is not enough for a session
+    // that is still running, though: nothing mutates the clock (so nothing
+    // fires ClockChanged, so refresh() never runs) just because time keeps
+    // passing. _tickLive() below is what actually keeps a running session's
+    // figures current between those refreshes: expand it at 1.0 h, leave
+    // the row open while the clock runs to 2.0 h, and the next tick has
+    // already moved draft.hours and the spin button to 2.0 h by the time
+    // +1/4 is pressed, sending 2.25 rather than a stale 1.25. A field the
+    // user HAS edited (its dirty flag is true) is left alone - that's an
+    // in-progress edit, not something to overwrite - and clearing dirty on
+    // a successful save is exactly what hands the field back to being
+    // re-seeded here.
     _draftFor(session, evidence) {
         let seededNote = session.description.length > 0
             ? session.description
@@ -573,7 +638,7 @@ export class TimesheetWindow {
     // ClockChanged, so anything typed or bumped but not yet saved must
     // survive that rebuild rather than being seeded back to the server's
     // last-saved values.
-    _adjustRows(session, evidence, draft) {
+    _adjustRows(session, evidence, draft, live) {
         let noteRow = new Adw.EntryRow({ title: 'Note' });
         // Seeded from the top activities, never auto-filled onto an
         // invoice: those strings are repository names, hostnames and
@@ -653,7 +718,45 @@ export class TimesheetWindow {
         });
         hoursRow.add_suffix(box);
 
+        // Handed to _tickLive() (only non-null for a still-running
+        // session - see _sessionRow): this "X h on the clock" subtitle and
+        // the spin button's value are exactly the two figures that
+        // otherwise freeze at whatever they were on expand, per the class
+        // comment on _draftFor.
+        if (live) {
+            live.hoursRow = hoursRow;
+            live.hours = hours;
+        }
+
         return [hoursRow, noteRow];
+    }
+
+    // Recomputes every currently-running session's row locally, every
+    // LIVE_TICK_SECONDS, with no D-Bus call at all: hoursOf()/
+    // actualHoursOf() already read Date.now() fresh on every call, so the
+    // numbers that would otherwise freeze at whatever they were on the last
+    // refresh() or expand (see the comments on _timeRow and _draftFor) just
+    // need recomputing and pushing back into the widgets that are already
+    // on screen - a subtitle string, an ActionRow subtitle, a spin button's
+    // value - never a rebuild.
+    _tickLive() {
+        for (let live of this._liveRows.values()) {
+            let { session, row, hoursRow, hours, draft } = live;
+            row.subtitle = sessionSubtitle(session);
+            if (!hoursRow || !hours || !draft)
+                continue;   // not expanded (yet): nothing else to refresh
+            hoursRow.subtitle = `${actualHoursOf(session).toFixed(2)} h on the clock`;
+            // hoursOf() returns the fixed billedHours override unchanged
+            // when one is set, and the live elapsed time otherwise - the
+            // same rule _draftFor() re-seeds an untouched draft with, so a
+            // manual override here is left exactly as billed, not walked
+            // forward every tick.
+            if (!draft.hoursDirty) {
+                let billed = hoursOf(session);
+                draft.hours = billed;
+                hours.value = billed;
+            }
+        }
     }
 
     // Shared by Save and "Use actual": both send a partial fields payload
