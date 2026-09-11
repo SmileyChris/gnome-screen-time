@@ -25,6 +25,10 @@ export class UsageTracker {
         this._sources = sources;
         this._lastTime = Date.now();
 
+        // Called with (startMs, endMs, path, names) for every stretch
+        // credited to the store, for the evidence log.
+        this.onInterval = null;
+
         // Where time is being credited right now: [appId], [appId, activityId]
         // or [appId, activityId, detailId], with matching display names. Null
         // while nothing is focused or the user is away.
@@ -248,8 +252,15 @@ export class UsageTracker {
             return;
         }
         let credited = Math.round(secs);
-        if (credited > 0)
+        if (credited > 0) {
             this._store.addTime(this._path, this._names, credited);
+            // Chained from _lastTime rather than to `now`: the line below
+            // advances the clock by exactly `credited` seconds in the
+            // uncapped case, so consecutive intervals meet to the
+            // millisecond instead of overlapping by the rounding residual.
+            this.onInterval?.(this._lastTime, this._lastTime + credited * 1000,
+                this._path, this._names);
+        }
         // When max-interval capped the stretch, the excess is discarded on
         // purpose (that is what the setting is for), so no residual.
         this._lastTime = secs < elapsed ? now : now - (secs - credited) * 1000;

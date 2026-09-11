@@ -3,6 +3,7 @@ import { PanelIndicator } from './panelIndicator.js';
 import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore } from './usageStore.js';
+import { IntervalLog } from './intervalLog.js';
 import { LimitNotifier } from './limitNotifier.js';
 import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
 import { BrowserSource } from './browserSource.js';
@@ -24,6 +25,12 @@ export default class ScreenTimeExtension extends Extension {
         this._dbus = new DbusService(browserSource);
         this._tracker = new UsageTracker(this._store, this._settings,
             new ActivitySourceRegistry([new ZellijSource(), browserSource]));
+        this._intervals = new IntervalLog(this._settings);
+        this._intervals.purge();
+        this._tracker.onInterval = (s, e, path, names) => {
+            this._intervals.record(s, e, path, names);
+            this._intervals.flush();
+        };
         this._limitNotifier = new LimitNotifier(this._settings);
 
         this._store.onChange = (appId, displayName, seconds) => {
@@ -68,6 +75,8 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator?.destroy();
         this._indicator = null;
         this._limitNotifier = null;
+        this._intervals?.destroy();
+        this._intervals = null;
         this._store?.destroy();
         this._store = null;
         this._settings = null;

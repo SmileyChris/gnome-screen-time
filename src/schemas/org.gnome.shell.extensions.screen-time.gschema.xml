@@ -47,5 +47,11 @@
       <summary>Per-app daily time limits</summary>
       <description>Maps an application id to a daily limit in minutes. When today's tracked time for that app reaches its limit, a one-time notification is shown for the rest of the day.</description>
     </key>
+    <key name="interval-retention-days" type="i">
+      <default>30</default>
+      <range min="0" max="365"/>
+      <summary>Evidence retention days</summary>
+      <description>How long the per-day activity timeline behind each clock session is kept. Sessions themselves are never deleted; past this many days a session keeps its hours but loses its breakdown. 0 keeps the timeline forever.</description>
+    </key>
   </schema>
 </schemalist>

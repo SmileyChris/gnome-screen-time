@@ -212,6 +212,14 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         retentionGroup.add(retentionRow);
 
+        const evidenceRow = new Adw.SpinRow({
+            title: 'Evidence retention',
+            subtitle: 'Days to keep the activity timeline behind each clock session. Sessions themselves are never deleted. 0 keeps it forever.',
+            adjustment: new Gtk.Adjustment({ lower: 0, upper: 365, step_increment: 5 }),
+        });
+        settings.bind('interval-retention-days', evidenceRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+        retentionGroup.add(evidenceRow);
+
         const historyGroup = new Adw.PreferencesGroup({
             title: 'History',
             description: `Total screen time over the last ${HISTORY_DAYS} days.`,
