@@ -16,6 +16,15 @@ function newId() {
     return GLib.uuid_string_random();
 }
 
+// The only fields update() may touch. A later task exposes update() over
+// D-Bus as UpdateSession(id, fieldsJson) -> JSON.parse() -> update(), so a
+// payload from another process could otherwise write any property at all -
+// including `id`, or fields like `interrupted`/`cleanStop` that only this
+// module should set. Unknown keys are dropped silently rather than
+// rejected, since a future, harmless field added to a payload should not
+// make the whole call fail.
+const UPDATABLE_FIELDS = ['billedHours', 'description', 'startMs', 'endMs', 'client'];
+
 export class ClockStore {
     constructor(settings) {
         this._settings = settings;
@@ -214,21 +223,27 @@ export class ClockStore {
         return current;
     }
 
-    update(id, fields) {
+    update(id, fields, nowMs = Date.now()) {
         let session = this._sessions.find(s => s.id === id);
         if (!session)
             return null;
 
-        let next = { ...session, ...fields };
+        let allowed = {};
+        for (let key of UPDATABLE_FIELDS) {
+            if (key in fields)
+                allowed[key] = fields[key];
+        }
+
+        let next = { ...session, ...allowed };
         if (next.endMs !== null && next.endMs < next.startMs)
             throw new Error('backwards');
-        if (this._overlaps(next))
+        if (this._overlaps(next, nowMs))
             throw new Error('overlap');
 
-        Object.assign(session, fields);
+        Object.assign(session, allowed);
         // Moving a start across the boundary re-files the session, which is
         // the one case where dayKey legitimately changes.
-        if (fields.startMs !== undefined) {
+        if (allowed.startMs !== undefined) {
             session.dayKey = dateKey(
                 GLib.DateTime.new_from_unix_local(session.startMs / 1000),
                 this._dayStartHour());

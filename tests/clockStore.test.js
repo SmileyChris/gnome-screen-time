@@ -336,47 +336,144 @@ function openSession(id, client, startMs, lastSeenMs) {
     };
 }
 
-test('ClockStore: recover closes every stale session, resuming only the freshest', () => {
+// The tie-break criterion under test is lastSeenMs, deliberately made to
+// disagree with both array position and startMs: p starts latest but has
+// the stalest heartbeat, q starts earliest but has the freshest heartbeat
+// (and sits in the middle of the array, not last), r is in between on both.
+// An implementation that used array position (`open[open.length - 1]`) or
+// sorted by startMs instead of lastSeenMs would pick p, not q, and fail
+// these tests.
+test('ClockStore: recover keeps the freshest heartbeat running, not the latest start or last position', () => {
     GLib.unlink(CLOCK_FILE);
     let t = at(2026, 9, 11, 9, 0);
-    let a = openSession('a', 'A', t - 5000, t);
-    let b = openSession('b', 'B', t, t + 1000);
-    let c = openSession('c', 'C', t + 500, t + 2000);
+    let p = openSession('p', 'P', t + 20000, t + 1000);  // latest start, stalest heartbeat
+    let q = openSession('q', 'Q', t, t + 9000);           // earliest start, freshest heartbeat
+    let r = openSession('r', 'R', t + 10000, t + 5000);   // middle on both
     Gio.File.new_for_path(CLOCK_FILE).replace_contents(
-        new TextEncoder().encode(JSON.stringify({ sessions: [a, b, c] })),
+        new TextEncoder().encode(JSON.stringify({ sessions: [p, q, r] })),
         null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 
     let clock = new ClockStore(new FakeSettings());
-    let interrupted = clock.recover(c.lastSeenMs + 60000); // under RESUME_GAP_MS for c
-    assertEqual(interrupted.id, 'b', 'the most recently interrupted of the stale ones');
+    let interrupted = clock.recover(q.lastSeenMs + 60000); // under RESUME_GAP_MS for q
+    assertEqual(interrupted.id, 'r', 'the most recently interrupted of the stale ones (p and r)');
     let day = clock.sessionsForDay('2026-09-11');
-    let reloadedA = day.find(s => s.id === 'a');
-    let reloadedB = day.find(s => s.id === 'b');
-    assertEqual(reloadedA.endMs, a.lastSeenMs, 'closed at its own heartbeat');
-    assertEqual(reloadedA.interrupted, true);
-    assertEqual(reloadedB.endMs, b.lastSeenMs);
-    assertEqual(reloadedB.interrupted, true);
-    assertEqual(clock.running.id, 'c', 'the freshest session resumes');
+    let reloadedP = day.find(s => s.id === 'p');
+    let reloadedR = day.find(s => s.id === 'r');
+    assertEqual(reloadedP.endMs, p.lastSeenMs, 'closed at its own heartbeat');
+    assertEqual(reloadedP.interrupted, true);
+    assertEqual(reloadedR.endMs, r.lastSeenMs);
+    assertEqual(reloadedR.interrupted, true);
+    assertEqual(clock.running.id, 'q',
+        'q has the freshest heartbeat even though it started first and sits mid-array');
     clock.destroy();
 });
 
-test('ClockStore: recover closes the freshest session too once its own gap is stale', () => {
+test('ClockStore: recover closes the freshest-heartbeat session too once its own gap is stale', () => {
     GLib.unlink(CLOCK_FILE);
     let t = at(2026, 9, 11, 9, 0);
-    let a = openSession('a', 'A', t - 5000, t);
-    let b = openSession('b', 'B', t, t + 1000);
-    let c = openSession('c', 'C', t + 500, t + 2000);
+    let p = openSession('p', 'P', t + 20000, t + 1000);
+    let q = openSession('q', 'Q', t, t + 9000);
+    let r = openSession('r', 'R', t + 10000, t + 5000);
     Gio.File.new_for_path(CLOCK_FILE).replace_contents(
-        new TextEncoder().encode(JSON.stringify({ sessions: [a, b, c] })),
+        new TextEncoder().encode(JSON.stringify({ sessions: [p, q, r] })),
         null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 
     let clock = new ClockStore(new FakeSettings());
-    let interrupted = clock.recover(c.lastSeenMs + 7200000); // well past RESUME_GAP_MS
-    assertEqual(interrupted.id, 'c', 'the freshest session is also closed and reported');
+    let interrupted = clock.recover(q.lastSeenMs + 7200000); // well past RESUME_GAP_MS for q too
+    assertEqual(interrupted.id, 'q', 'the freshest-heartbeat session is also closed and reported');
     let day = clock.sessionsForDay('2026-09-11');
     assertEqual(day.every(s => s.interrupted), true, 'every session was interrupted');
-    let reloadedC = day.find(s => s.id === 'c');
-    assertEqual(reloadedC.endMs, c.lastSeenMs);
+    let reloadedQ = day.find(s => s.id === 'q');
+    assertEqual(reloadedQ.endMs, q.lastSeenMs);
     assertEqual(clock.running, null);
+    clock.destroy();
+});
+
+test('ClockStore: recover with nothing open returns null and touches nothing', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let before = clock.sessionsForDay('2026-09-11');
+    assertEqual(clock._dirty, false, 'precondition: nothing pending after stop()');
+    let result = clock.recover(t + 7200000);
+    assertEqual(result, null);
+    assertEqual(clock.sessionsForDay('2026-09-11'), before, 'nothing changed');
+    assertEqual(clock._dirty, false, 'recover() with nothing open never marks the store dirty');
+    clock.destroy();
+});
+
+test('ClockStore: the stray-session anomaly log is throttled per session id', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2026, 9, 11, 9, 0);
+    let running = openSession('running-x', 'B', t + 3600000, t + 3600000);
+    let strayOne = openSession('stray-x1', 'A', t, t + 1800000);
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: [running, strayOne] })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    clock.billedSecondsForDay('2026-09-11', t + 5400000);
+    clock.billedSecondsForDay('2026-09-11', t + 5500000);
+    assertEqual(clock._reportedAnomalies.size, 1,
+        'two calls against the same stray session log it only once');
+
+    // A second, distinct stray session is still new to the throttle set.
+    let strayTwo = openSession('stray-x2', 'C', t - 3600000, t - 1800000);
+    clock._sessions.push(strayTwo);
+    clock.billedSecondsForDay('2026-09-11', t + 5600000);
+    assertEqual(clock._reportedAnomalies.size, 2, 'a distinct stray id is still reported');
+    clock.destroy();
+});
+
+test('ClockStore: update on the running session checks overlap against the given nowMs, not the wall clock', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2020, 1, 1, 9, 0);
+    let beta = openSession('beta', 'BETA', t, t);
+    let future = {
+        id: 'future', client: 'OTHER', dayKey: '2020-01-01',
+        startMs: t + 10800000, endMs: t + 14400000, lastSeenMs: t + 14400000,
+        billedHours: null, description: '', interrupted: false,
+        cleanStop: false, exportedAt: null,
+    };
+    beta.dayKey = '2020-01-01';
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: [beta, future] })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    // Accepted: BETA is still running (endMs null), checked at a synthetic
+    // "now" well before `future` starts. If update() fell back to the real
+    // wall clock instead of the given nowMs, BETA's open-ended span would
+    // run past `future`'s start and this would spuriously overlap.
+    let updated = clock.update('beta', { startMs: t + 1800000 }, t + 3600000);
+    assertEqual(updated.startMs, t + 1800000, 'no overlap: the synthetic now stays short of `future`');
+
+    // Rejected: same edit, but checked at a synthetic now after `future`
+    // has already started.
+    let threw = null;
+    try {
+        clock.update('beta', { startMs: t + 1800000 }, t + 12000000);
+    } catch (e) {
+        threw = e.message;
+    }
+    assertEqual(threw, 'overlap');
+    clock.destroy();
+});
+
+test('ClockStore: update ignores fields outside the documented allowlist', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let originalId = session.id;
+    let updated = clock.update(session.id, {
+        id: 'not-allowed',
+        interrupted: true,
+        billedHours: 0.5,
+    });
+    assertEqual(updated.id, originalId, 'id is not writable through update()');
+    assertEqual(updated.interrupted, false, 'interrupted is not writable through update()');
+    assertEqual(updated.billedHours, 0.5, 'the legitimate field in the same call still applies');
     clock.destroy();
 });
