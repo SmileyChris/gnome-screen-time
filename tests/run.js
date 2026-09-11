@@ -21,6 +21,7 @@ const FILES = [
     './intervalLog.test.js',
     './clockStore.test.js',
     './evidence.test.js',
+    './timeExport.test.js',
     './clockTime.test.js',
     './clients.test.js',
     './accelerators.test.js',
