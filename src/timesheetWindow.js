@@ -12,6 +12,7 @@ import { INTERFACE_XML } from './clockDBus.js';
 // can be unit-tested directly rather than only ever exercised through this
 // GTK-dependent window.
 import { parseClock } from './clockTime.js';
+import { HoursBinding, saveFields } from './timesheetDraft.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
@@ -21,6 +22,13 @@ const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 // gets this right by construction.
 function hasBilledHours(session) {
     return session.billedHours !== null && session.billedHours !== undefined;
+}
+
+// Whether keyboard focus is on widget or anything inside it. A SpinButton's
+// focus sits on its internal text entry, so has_focus alone would miss it.
+function hasFocusWithin(widget) {
+    let focus = widget.get_root()?.get_focus() ?? null;
+    return focus !== null && (focus === widget || focus.is_ancestor(widget));
 }
 
 function hoursOf(session) {
@@ -721,10 +729,10 @@ export class TimesheetWindow {
             draft.note = noteRow.text;
             draft.noteDirty = true;
         });
-        hours.connect('value-changed', () => {
-            draft.hours = hours.value;
-            draft.hoursDirty = true;
-        });
+        // The Bill control's edits go through HoursBinding, which tells a
+        // person's change apart from _tickLive()'s own refresh: GTK fires
+        // value-changed for both, and only the first may mark hours edited.
+        let binding = new HoursBinding(hours.adjustment, draft);
 
         // Renamed from "Reset" and moved away from Save: it sends
         // billedHours alone (the note is left untouched, since
@@ -750,20 +758,12 @@ export class TimesheetWindow {
 
         let save = new Gtk.Button({ label: 'Save', css_classes: ['suggested-action'] });
         save.connect('clicked', () => {
-            if (!draft.hoursDirty && !draft.noteDirty) {
+            // Only what was actually edited: see saveFields.
+            let fields = saveFields(draft, hours.value, noteRow.text);
+            if (Object.keys(fields).length === 0) {
                 this._toast('Nothing to save.');
                 return;
             }
-            // Send only what was actually edited: an hours-only edit must
-            // not re-pin the note to its unedited seed (repository names,
-            // hostnames, subreddits reaching an invoice), and a note-only
-            // edit (fixing a typo) must not pin billedHours to a snapshot
-            // that stops following later start/end edits.
-            let fields = {};
-            if (draft.hoursDirty)
-                fields.billedHours = Math.round(hours.value * 100) / 100;
-            if (draft.noteDirty)
-                fields.description = noteRow.text.trim();
             this._updateSession(session, fields);
         });
         box.append(save);
@@ -782,6 +782,7 @@ export class TimesheetWindow {
         if (live) {
             live.hoursRow = hoursRow;
             live.hours = hours;
+            live.binding = binding;
         }
 
         return [hoursRow, noteRow];
@@ -797,9 +798,9 @@ export class TimesheetWindow {
     // value - never a rebuild.
     _tickLive() {
         for (let live of this._liveRows.values()) {
-            let { session, row, hoursRow, hours, draft } = live;
+            let { session, row, hoursRow, hours, binding, draft } = live;
             row.subtitle = sessionSubtitle(session);
-            if (!hoursRow || !hours || !draft)
+            if (!hoursRow || !hours || !binding || !draft)
                 continue;   // not expanded (yet): nothing else to refresh
             hoursRow.subtitle = `${actualHoursOf(session).toFixed(2)} h on the clock`;
             // hoursOf() returns the fixed billedHours override unchanged
@@ -807,11 +808,11 @@ export class TimesheetWindow {
             // same rule _draftFor() re-seeds an untouched draft with, so a
             // manual override here is left exactly as billed, not walked
             // forward every tick.
-            if (!draft.hoursDirty) {
-                let billed = hoursOf(session);
-                draft.hours = billed;
-                hours.value = billed;
-            }
+            // Through the binding, so this refresh isn't taken for an edit
+            // (setting the value directly fires value-changed, which marked
+            // the hours edited and let a note-only Save pin them), and not
+            // while the person is typing in the control.
+            binding.refresh(hoursOf(session), { focused: hasFocusWithin(hours) });
         }
     }
 
