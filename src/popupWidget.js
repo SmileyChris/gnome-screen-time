@@ -284,19 +284,24 @@ export class PopupWidget {
         // always today. The clock rows section hides itself on any day but
         // today for the same reason (a live control mixed with another
         // day's numbers is misleading) - see _build()'s call to
-        // _clockSection.build(). Tapping it stops the running clock, or
-        // starts the last client again.
+        // _clockSection.build(). Tapping it pauses the running clock, or
+        // resumes the last client; its stop button ends the day's clocking
+        // instead, forgetting last-client so the card cannot resume it and
+        // the panel stops showing a total (see panelMode.js).
         let isToday = this._date === todayKeyFor(this._settings);
         let running = isToday ? (this._clock?.running ?? null) : null;
         let billed = this._clock ? this._clock.billedSecondsForDay(this._date) : 0;
-        // Nothing to toggle on an earlier day, or with no session running
-        // and no client ever clocked in (a fresh install, or before any
-        // client has been clocked), or with last-client naming one since
-        // deleted from Preferences (see clients.js's isKnownClient): the
-        // card is then not reactive and has no hover highlight, rather than
-        // a live control that does nothing when pressed.
-        let canToggle = isToday && !!this._clock &&
-            (running !== null || isKnownClient(this._settings, this._settings.get_string('last-client')));
+        let last = this._settings.get_string('last-client');
+        // Paused: no session running, but a client to resume. Not with
+        // last-client empty (stopped, a fresh install, or before any client
+        // has been clocked) or naming one since deleted from Preferences
+        // (see clients.js's isKnownClient). With nothing running and nothing
+        // to resume, or on an earlier day, the card is not reactive and has
+        // no hover highlight, rather than a live control that does nothing
+        // when pressed.
+        let paused = isToday && !!this._clock && running === null &&
+            isKnownClient(this._settings, last);
+        let canToggle = running !== null || paused;
         let clockTier = running ? CLOCK_RUNNING : CLOCK_STOPPED;
         let clock = new St.BoxLayout({
             vertical: true,
@@ -313,13 +318,61 @@ export class PopupWidget {
         // to what half of ROW_W leaves after the cards' padding and gap;
         // the full name stays visible in the clock rows below
         // (ClockSection), which ellipsize the same way. An earlier day has
-        // no running client, just that day's already-billed total.
+        // no running client, just that day's already-billed total. The
+        // pause glyph and stop button share that width, so each takes its
+        // own share off the cap.
+        let titleRow = new St.BoxLayout();
+        let titleMaxW = Math.round(ROW_W / 2) - 36;
+        if (paused) {
+            titleRow.add_child(new St.Icon({
+                icon_name: 'media-playback-pause-symbolic',
+                icon_size: 12,
+                y_align: Clutter.ActorAlign.CENTER,
+                style: `color: ${CARD_FG}; margin-right: 4px;`,
+            }));
+            titleMaxW -= 16;
+        }
         let title = new St.Label({
-            text: !isToday ? 'Project Time' : running ? running.client : 'Not clocked',
-            style: TITLE_STYLE + ` max-width: ${Math.round(ROW_W / 2) - 36}px;`,
+            text: !isToday ? 'Project Time' : running ? running.client : paused ? last : 'Not clocked',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
         });
         title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-        clock.add_child(title);
+        titleRow.add_child(title);
+
+        let stopBtn = null;
+        if (canToggle) {
+            stopBtn = new St.Button({
+                child: new St.Icon({
+                    icon_name: 'media-playback-stop-symbolic',
+                    icon_size: 12,
+                    style: `color: ${CARD_FG};`,
+                }),
+                can_focus: true,
+                accessible_name: 'Stop',
+                y_align: Clutter.ActorAlign.CENTER,
+                style_class: 'screen-time-card-stop',
+            });
+            stopBtn.connect('clicked', () => {
+                try {
+                    // Re-derived rather than closed over `running`, as the
+                    // card tap below does.
+                    if (this._clock.running)
+                        this._clock.stop();
+                    // Only once stop() has not thrown: a failed stop leaves
+                    // the session running, and it stays resumable.
+                    this._settings.set_string('last-client', '');
+                } catch (e) {
+                    console.error(`[ScreenTime] clock stop failed: ${e.message}`);
+                } finally {
+                    this._build();
+                }
+            });
+            titleRow.add_child(stopBtn);
+            titleMaxW -= 20;
+        }
+        title.style = TITLE_STYLE + ` max-width: ${titleMaxW}px;`;
+        clock.add_child(titleRow);
 
         clock.add_child(new St.Label({
             text: billed > 0 ? formatTime(billed) : '0m',
@@ -332,6 +385,10 @@ export class PopupWidget {
                 clock.style = cardStyle(clockTier, clock.hover);
             });
             clock.connect('button-release-event', () => {
+                // A release over the stop button is that button's click,
+                // not a tap on the card around it.
+                if (stopBtn.hover)
+                    return Clutter.EVENT_STOP;
                 try {
                     // Re-derived here rather than closed over `running`:
                     // the panel/shortcut can change the clock while the

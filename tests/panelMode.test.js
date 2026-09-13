@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import { test, assertEqual } from './harness.js';
 import { FakeSettings } from './fakeSettings.js';
 import { ClockStore, CLOCK_FILE } from '../src/clockStore.js';
-import { migratePanelSetting, panelLabelText, panelClockState } from '../src/panelMode.js';
+import { migratePanelSetting, panelLabelText, panelLabelDimmed, panelClockState } from '../src/panelMode.js';
 
 function at(y, mo, d, h, mi = 0) {
     return GLib.DateTime.new_local(y, mo, d, h, mi, 0).to_unix() * 1000;
@@ -62,8 +62,9 @@ test('panelMode: already-migrated is a no-op, even if show-total-in-panel would 
 
 // --- panelLabelText ---
 
-const stopped = (seconds = 0) => ({ running: false, away: false, client: '', seconds });
-const running = (client, seconds) => ({ running: true, away: false, client, seconds });
+const stopped = (seconds = 0) => ({ running: false, away: false, paused: false, client: '', seconds });
+const paused = (seconds = 0) => ({ running: false, away: false, paused: true, client: '', seconds });
+const running = (client, seconds) => ({ running: true, away: false, paused: false, client, seconds });
 
 test('panelLabelText: "screen" mode shows the formatted total when there is time today', () => {
     assertEqual(panelLabelText('screen', 720, stopped()), '12m');
@@ -77,12 +78,31 @@ test('panelLabelText: "client" mode running shows the client and elapsed time', 
     assertEqual(panelLabelText('client', 0, running('ACME', 720)), 'ACME 12m');
 });
 
-test('panelLabelText: "client" mode stopped with billed time today shows the total', () => {
-    assertEqual(panelLabelText('client', 0, stopped(720)), '12m');
+test('panelLabelText: "client" mode paused with billed time today shows the total', () => {
+    assertEqual(panelLabelText('client', 0, paused(720)), '12m');
 });
 
-test('panelLabelText: "client" mode stopped at zero hides', () => {
-    assertEqual(panelLabelText('client', 0, stopped(0)), '');
+test('panelLabelText: "client" mode paused at zero hides', () => {
+    assertEqual(panelLabelText('client', 0, paused(0)), '');
+});
+
+test('panelLabelText: "client" mode stopped hides even with billed time today', () => {
+    assertEqual(panelLabelText('client', 0, stopped(720)), '');
+});
+
+test('panelLabelText: "screen" mode ignores paused/stopped and shows the screen total', () => {
+    assertEqual(panelLabelText('screen', 720, stopped(60)), '12m');
+    assertEqual(panelLabelText('screen', 720, paused(60)), '12m');
+});
+
+// --- panelLabelDimmed ---
+
+test('panelLabelDimmed: only "client" mode while paused is faded', () => {
+    assertEqual(panelLabelDimmed('client', paused(720)), true);
+    assertEqual(panelLabelDimmed('client', running('ACME', 720)), false);
+    assertEqual(panelLabelDimmed('client', stopped(720)), false);
+    assertEqual(panelLabelDimmed('screen', paused(720)), false);
+    assertEqual(panelLabelDimmed('none', paused(720)), false);
 });
 
 test('panelLabelText: "none" mode hides even while running with time on the clock', () => {
@@ -105,7 +125,7 @@ test('panelClockState: a running session reports its own elapsed time, not the d
 
     let nowMs = t + 1800000 + 120000;  // BETA has been running 2 minutes
     let state = panelClockState(clock, '2026-09-11', nowMs, false);
-    assertEqual(state, { running: true, away: false, client: 'BETA', seconds: 120 },
+    assertEqual(state, { running: true, away: false, paused: false, client: 'BETA', seconds: 120 },
         'must be BETA\'s own 2 minutes, not ACME\'s 30 plus BETA\'s 2');
     clock.destroy();
 });
@@ -119,7 +139,7 @@ test('panelClockState: a stopped clock reports today\'s billed total across ever
     clock.stop(t + 1800000 + 120000);      // closes BETA after 2 billed minutes
 
     let state = panelClockState(clock, '2026-09-11', t + 3600000, false);
-    assertEqual(state, { running: false, away: false, client: '', seconds: 1920 },
+    assertEqual(state, { running: false, away: false, paused: false, client: '', seconds: 1920 },
         '30 ACME minutes + 2 BETA minutes = 1920 seconds');
     clock.destroy();
 });
@@ -128,7 +148,29 @@ test('panelClockState: nothing clocked today reports zero and running: false', (
     let settings = new FakeSettings();
     let clock = freshClock(settings);
     let state = panelClockState(clock, '2026-09-11', at(2026, 9, 11, 9, 0), false);
-    assertEqual(state, { running: false, away: false, client: '', seconds: 0 });
+    assertEqual(state, { running: false, away: false, paused: false, client: '', seconds: 0 });
+    clock.destroy();
+});
+
+test('panelClockState: stopped with a client to resume is paused; without one it is not', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 1800000);
+
+    let nowMs = t + 3600000;
+    assertEqual(panelClockState(clock, '2026-09-11', nowMs, false, true).paused, true);
+    assertEqual(panelClockState(clock, '2026-09-11', nowMs, false, false).paused, false);
+    clock.destroy();
+});
+
+test('panelClockState: a running clock is never paused, even with a client to resume', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    assertEqual(panelClockState(clock, '2026-09-11', t + 60000, false, true).paused, false);
     clock.destroy();
 });
 

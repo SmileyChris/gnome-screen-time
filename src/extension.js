@@ -166,13 +166,25 @@ export default class ScreenTimeExtension extends Extension {
                 });
 
             migratePanelSetting(this._settings);
+            // last-client and the client list decide whether a stopped
+            // clock is paused (see panelClockState), so both re-sync it.
             this._settings.connectObject(
-                'changed::panel-time', () => this._syncPanelLabel(), this);
+                'changed::panel-time', () => this._syncPanelLabel(),
+                'changed::last-client', () => this._syncPanelClock(),
+                'changed::clients', () => this._syncPanelClock(),
+                this);
             this._syncPanelLabel();
 
             // Must be set before ClockDBus is constructed below - see the
             // comment there.
             this._clock.onChange = () => {
+                // Whatever started the running session - a client row, the
+                // card, the shortcut, DBus - it is the one pausing leaves
+                // resumable. Without this a DBus start after Stop would
+                // look stopped, not paused, once paused.
+                let running = this._clock?.running;
+                if (running && this._settings?.get_string('last-client') !== running.client)
+                    this._settings.set_string('last-client', running.client);
                 this._syncPanelClock();
                 this._notifier?.syncSaveHealth();
             };
@@ -359,7 +371,8 @@ export default class ScreenTimeExtension extends Extension {
             return;
         this._indicator.setClock(panelClockState(
             this._clock, todayKeyFor(this._settings), Date.now(),
-            this._tracker?.away ?? false));
+            this._tracker?.away ?? false,
+            isKnownClient(this._settings, this._settings.get_string('last-client'))));
     }
 
     // Must be safe to call at any point enable() might have thrown (see the

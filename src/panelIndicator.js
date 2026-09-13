@@ -4,7 +4,8 @@ import GObject from 'gi://GObject';
 import Pango from 'gi://Pango';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import { panelLabelText } from './panelMode.js';
+import { panelLabelText, panelLabelDimmed } from './panelMode.js';
+import { DIM_OPACITY } from './usageBar.js';
 
 export const PanelIndicator = class extends PanelMenu.Button {
     static {
@@ -43,7 +44,7 @@ export const PanelIndicator = class extends PanelMenu.Button {
 
         this._totalSeconds = 0;
         this._mode = 'screen';
-        this._clock = { running: false, away: false, client: '', seconds: 0 };
+        this._clock = { running: false, away: false, paused: false, client: '', seconds: 0 };
         this._updateLabel();
     }
 
@@ -68,7 +69,7 @@ export const PanelIndicator = class extends PanelMenu.Button {
 
     // The dot shows in every mode, `none` included: whether the clock is
     // running is the one thing the panel must answer without a click.
-    // Hollow means away but still counting.
+    // Hollow means away but still counting. A paused clock's total is faded.
     _updateLabel() {
         this._dot.visible = this._clock.running;
         this._dot.text = this._clock.away ? '○' : '●';
@@ -77,5 +78,6 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._label.visible = text.length > 0;
         if (this._label.visible)
             this._label.text = text;
+        this._label.opacity = panelLabelDimmed(this._mode, this._clock) ? DIM_OPACITY : 255;
     }
 };

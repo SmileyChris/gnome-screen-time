@@ -15,14 +15,20 @@ export function migratePanelSetting(settings) {
 // The clock state PanelIndicator.setClock takes, derived from a real
 // ClockStore. Running: the current session's own elapsed time - a live
 // timer, so switching from ACME to BETA shows BETA's two minutes, not
-// ACME's half hour plus BETA's two. Stopped: today's billed total across
+// ACME's half hour plus BETA's two. Not running: today's billed total across
 // every client, the "what there is to bill" summary the running branch is
 // deliberately not.
-export function panelClockState(clock, dayKey, nowMs = Date.now(), away = false) {
+//
+// `resumable` is whether last-client names a known client, i.e. whether the
+// popup card or the shortcut would start it again. Not running and
+// resumable is paused; not running and not resumable is stopped, which is
+// what the card's stop button leaves behind by clearing last-client.
+export function panelClockState(clock, dayKey, nowMs = Date.now(), away = false, resumable = false) {
     let running = clock.running;
     return {
         running: running !== null,
         away,
+        paused: running === null && resumable,
         client: running?.client ?? '',
         seconds: running !== null
             ? (nowMs - running.startMs) / 1000
@@ -31,13 +37,20 @@ export function panelClockState(clock, dayKey, nowMs = Date.now(), away = false)
 }
 
 // The panel label's text for a mode and a clock state; '' means hide the label.
-// clock = { running, away, client, seconds } as PanelIndicator.setClock takes it.
+// clock = { running, away, paused, client, seconds } as PanelIndicator.setClock
+// takes it. A stopped clock shows nothing: stopping means done for now.
 export function panelLabelText(mode, totalSeconds, clock) {
     if (mode === 'screen' && totalSeconds > 0)
         return formatTime(totalSeconds);
     if (mode === 'client' && clock.running)
         return `${clock.client} ${formatTime(clock.seconds)}`;
-    if (mode === 'client' && clock.seconds > 0)
+    if (mode === 'client' && clock.paused && clock.seconds > 0)
         return formatTime(clock.seconds);
     return '';
+}
+
+// Whether the panel label is faded: only a paused clock's total, so it
+// reads as not counting while still there to resume.
+export function panelLabelDimmed(mode, clock) {
+    return mode === 'client' && clock.paused;
 }

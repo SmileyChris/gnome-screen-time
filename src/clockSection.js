@@ -8,8 +8,9 @@ import { recentClients } from './clients.js';
 import { todayKeyFor } from './usageStore.js';
 
 // Rows below the app breakdown: one per client, tap to clock in, tap the
-// running one to stop. The list doubles as the readout and the control, so
-// there is no separate start button.
+// running one to pause it (the clock card's stop button is the only way to
+// stop outright). The list doubles as the readout and the control, so there
+// is no separate start button.
 //
 // Rebuilt from scratch inside PopupWidget._build(), exactly like
 // AppTimerSection: _build() starts with menu.removeAll(), which destroys
