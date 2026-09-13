@@ -38,18 +38,18 @@
     background-color: rgba(128, 128, 128, 0.4);
 }
 
-/* The clock card's stop button. The card is always a light gradient, so
- * this darkens rather than using the theme-neutral gray above. */
-.screen-time-card-stop {
+/* The clock card's pause, play and stop buttons. The card is always a light
+ * gradient, so these darken rather than using the theme-neutral gray above. */
+.screen-time-card-button {
     padding: 3px;
     border-radius: 99px;
     transition-duration: 150ms;
 }
 
-.screen-time-card-stop:hover {
+.screen-time-card-button:hover {
     background-color: rgba(0, 0, 0, 0.12);
 }
 
-.screen-time-card-stop:active {
+.screen-time-card-button:active {
     background-color: rgba(0, 0, 0, 0.22);
 }
