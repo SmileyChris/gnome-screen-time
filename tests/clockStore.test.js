@@ -69,6 +69,9 @@ test('ClockStore: switching clients after a backward clock step clamps the close
     let clock = freshClock();
     let t = at(2026, 9, 11, 9, 0);
     let first = clock.start('ACME', t);
+    // Noted, so the zero-length session this clamp produces is kept rather
+    // than dropped as noise - the clamp is what's under test here.
+    clock.update(first.id, { description: 'noted' }, t);
     // The system clock stepped backward (an NTP correction, say) before the
     // switch to BETA - closing ACME at an instant earlier than its own
     // start would otherwise write a negative-duration record, which the
@@ -275,13 +278,13 @@ test('ClockStore: recover closes a stale session at its last heartbeat', () => {
     let clock = freshClock(settings);
     let t = at(2026, 9, 11, 9, 0);
     clock.start('ACME', t);
-    clock.heartbeat(t + 30000);
+    clock.heartbeat(t + 1800000);
     clock.destroySilently();
 
     let reopened = new ClockStore(settings);
     let interrupted = reopened.recover(t + 7200000);
     assertEqual(reopened.running, null);
-    assertEqual(interrupted.endMs, t + 30000, 'billed to the last heartbeat, not to now');
+    assertEqual(interrupted.endMs, t + 1800000, 'billed to the last heartbeat, not to now');
     assertEqual(interrupted.interrupted, true);
     reopened.destroy();
 });
@@ -352,13 +355,13 @@ test('ClockStore: recover with no resumeId closes that same session at its lastS
     let clock = freshClock(settings);
     let t = at(2026, 9, 11, 9, 0);
     clock.start('ACME', t);
-    clock.release(t + 45000);
+    clock.release(t + 2700000);
 
     let reopened = new ClockStore(settings);
-    let twoHoursLater = t + 45000 + 2 * 3600000;
+    let twoHoursLater = t + 2700000 + 2 * 3600000;
     let interrupted = reopened.recover(twoHoursLater);
     assertEqual(reopened.running, null);
-    assertEqual(interrupted.endMs, t + 45000, 'closed at its last heartbeat, not at recover()\'s nowMs');
+    assertEqual(interrupted.endMs, t + 2700000, 'closed at its last heartbeat, not at recover()\'s nowMs');
     assertEqual(interrupted.interrupted, true);
     reopened.destroy();
 });
@@ -370,7 +373,7 @@ test('ClockStore: recover closes a stray second open session even when resumeId 
     // more recent heartbeat) but must still be closed unconditionally, since
     // at most one session can ever be resumed.
     let kept = openSession('kept', 'ACME', t, t + 1000);
-    let stray = openSession('stray', 'BETA', t + 2000, t + 9000);
+    let stray = openSession('stray', 'BETA', t + 2000, t + 9000, NOTED);
     Gio.File.new_for_path(CLOCK_FILE).replace_contents(
         new TextEncoder().encode(JSON.stringify({ sessions: [kept, stray] })),
         null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
@@ -658,13 +661,19 @@ test('ClockStore: selectExportable + markExported, run in sequence, stamps only 
 // brief's single-session sample code). Only one clock can run at a time, so
 // more than one open session on disk is corruption a hand edit or a bad
 // write could produce.
-function openSession(id, client, startMs, lastSeenMs) {
+function openSession(id, client, startMs, lastSeenMs, extra = {}) {
     return {
         id, client, dayKey: '2026-09-11', startMs, endMs: null, lastSeenMs,
         billedHours: null, description: '', interrupted: false,
         cleanStop: false, exportedAt: null,
+        ...extra,
     };
 }
+
+// For hand-built sessions that close under a minute in a test that isn't
+// about duration: a note keeps them from being dropped as noise (see
+// ClockStore's isNoise()).
+const NOTED = { description: 'noted' };
 
 // The tie-break criterion under test is lastSeenMs, deliberately made to
 // disagree with both array position and startMs: p starts latest but has
@@ -676,9 +685,9 @@ function openSession(id, client, startMs, lastSeenMs) {
 test('ClockStore: recover keeps the freshest heartbeat running, not the latest start or last position', () => {
     GLib.unlink(CLOCK_FILE);
     let t = at(2026, 9, 11, 9, 0);
-    let p = openSession('p', 'P', t + 20000, t + 1000);  // latest start, stalest heartbeat
-    let q = openSession('q', 'Q', t, t + 9000);           // earliest start, freshest heartbeat
-    let r = openSession('r', 'R', t + 10000, t + 5000);   // middle on both
+    let p = openSession('p', 'P', t + 20000, t + 1000, NOTED);  // latest start, stalest heartbeat
+    let q = openSession('q', 'Q', t, t + 9000, NOTED);           // earliest start, freshest heartbeat
+    let r = openSession('r', 'R', t + 10000, t + 5000, NOTED);   // middle on both
     Gio.File.new_for_path(CLOCK_FILE).replace_contents(
         new TextEncoder().encode(JSON.stringify({ sessions: [p, q, r] })),
         null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
@@ -708,9 +717,9 @@ test('ClockStore: recover keeps the freshest heartbeat running, not the latest s
 test('ClockStore: recover closes the freshest-heartbeat session too once its own gap is stale', () => {
     GLib.unlink(CLOCK_FILE);
     let t = at(2026, 9, 11, 9, 0);
-    let p = openSession('p', 'P', t + 20000, t + 1000);
-    let q = openSession('q', 'Q', t, t + 9000);
-    let r = openSession('r', 'R', t + 10000, t + 5000);
+    let p = openSession('p', 'P', t + 20000, t + 1000, NOTED);
+    let q = openSession('q', 'Q', t, t + 9000, NOTED);
+    let r = openSession('r', 'R', t + 10000, t + 5000, NOTED);
     Gio.File.new_for_path(CLOCK_FILE).replace_contents(
         new TextEncoder().encode(JSON.stringify({ sessions: [p, q, r] })),
         null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
@@ -1824,4 +1833,120 @@ test('ClockStore: recover does nothing for an out-of-range nowMs, leaving a rece
     let [, bytesAfter] = Gio.File.new_for_path(CLOCK_FILE).load_contents(null);
     assertEqual(new TextDecoder().decode(bytesAfter), new TextDecoder().decode(bytesBefore),
         'the file on disk is byte-identical to what it was before either recover() call');
+});
+
+// --- Sessions under a minute: a mis-tap, or a client switched away from
+// straight away, is dropped as it closes rather than kept as billing noise ---
+
+function closedSession(id, client, startMs, endMs, extra = {}) {
+    return { ...openSession(id, client, startMs, endMs), endMs, ...extra };
+}
+
+test('ClockStore: a session stopped under a minute is dropped, on disk too', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 59999);
+    assertEqual(clock.running, null);
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 0);
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    assertEqual(reopened.sessionsForDay('2026-09-11').length, 0, 'not in clock.json either');
+    reopened.destroy();
+});
+
+test('ClockStore: a session of exactly a minute is kept', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.stop(t + 60000);
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 1);
+    clock.destroy();
+});
+
+test('ClockStore: switching away under a minute drops the outgoing session and keeps the new one running', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.start('BETA', t + 20000);
+    let day = clock.sessionsForDay('2026-09-11');
+    assertEqual(day.length, 1);
+    assertEqual(day[0].client, 'BETA');
+    assertEqual(clock.running.client, 'BETA');
+    assertEqual(clock.running.startMs, t + 20000);
+    clock.destroy();
+});
+
+test('ClockStore: a short session given billed hours is kept', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.update(session.id, { billedHours: 0.25 }, t + 10000);
+    clock.stop(t + 20000);
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 1);
+    clock.destroy();
+});
+
+test('ClockStore: a short session given a note is kept', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let session = clock.start('ACME', t);
+    clock.update(session.id, { description: 'call' }, t + 10000);
+    clock.stop(t + 20000);
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 1);
+    clock.destroy();
+});
+
+test('ClockStore: recover drops a stale session under a minute instead of announcing it', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.heartbeat(t + 30000);
+    clock.destroySilently();
+
+    let reopened = new ClockStore(settings);
+    let interrupted = reopened.recover(t + 7200000);
+    assertEqual(interrupted, null, 'nothing left to announce');
+    assertEqual(reopened.running, null);
+    assertEqual(reopened.sessionsForDay('2026-09-11').length, 0);
+    reopened.destroySilently();
+
+    // Had the drop not been saved, clock.json would still hold the session
+    // open, and loading it again would find it there.
+    let again = new ClockStore(settings);
+    assertEqual(again.sessionsForDay('2026-09-11').length, 0, 'the drop reached clock.json');
+    again.destroy();
+});
+
+test('ClockStore: closeForShutdown drops a session under a minute', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.closeForShutdown(t + 30000);
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 0);
+    clock.destroy();
+});
+
+test('ClockStore: loading drops closed, untouched, unexported sessions under a minute', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2026, 9, 11, 9, 0);
+    let records = [
+        closedSession('tap', 'ACME', t, t + 2000),
+        closedSession('billed', 'ACME', t + 60000, t + 70000, { billedHours: 0.25 }),
+        closedSession('noted', 'ACME', t + 120000, t + 130000, { description: 'call' }),
+        closedSession('exported', 'ACME', t + 180000, t + 190000, { exportedAt: t + 200000 }),
+        closedSession('long', 'ACME', t + 240000, t + 3600000),
+        openSession('open', 'BETA', t + 3600000, t + 3610000),
+    ];
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify({ sessions: records })),
+        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+
+    let clock = new ClockStore(new FakeSettings());
+    assertEqual(clock.sessionsForDay('2026-09-11').map(s => s.id).join(','),
+        'billed,noted,exported,long,open');
+    clock.destroy();
 });

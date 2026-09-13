@@ -12,6 +12,20 @@ export const CLOCK_FILE = GLib.build_filenamev([STORE_DIR, 'clock.json']);
 // really ended when the heartbeat stopped.
 export const RESUME_GAP_MS = 120000;
 
+// The popup and the Timesheet count in whole minutes, so a closed session
+// shorter than this that nobody has touched - no billed hours, no note,
+// never exported - is a mis-tap or a client switched away from straight
+// away, not work. It is dropped rather than kept as billing noise.
+export const MIN_SESSION_MS = 60000;
+
+function isNoise(session) {
+    return session.endMs !== null &&
+        session.endMs - session.startMs < MIN_SESSION_MS &&
+        session.billedHours === null &&
+        session.description === '' &&
+        session.exportedAt === null;
+}
+
 function newId() {
     return GLib.uuid_string_random();
 }
@@ -318,7 +332,14 @@ export class ClockStore {
                     `session record(s); original backed up to ${backupPath}`);
             }
         }
-        this._sessions = valid;
+        // Sessions under a minute saved before _close() started dropping
+        // them. Gone from memory now, and from clock.json at the next save.
+        let kept = valid.filter(s => !isNoise(s));
+        if (kept.length < valid.length) {
+            console.error(`[ScreenTime] clock load: dropped ${valid.length - kept.length} ` +
+                'session(s) under a minute');
+        }
+        this._sessions = kept;
     }
 
     // Parses `contents` (the raw bytes of clock.json) into its `sessions`
@@ -547,34 +568,31 @@ export class ClockStore {
         let resumed = resumeId !== null ? open.find(s => s.id === resumeId) ?? null : null;
         let interrupted = [];
         let changed = false;
-
-        if (resumed) {
-            let others = open.filter(s => s !== resumed)
-                .sort((a, b) => a.lastSeenMs - b.lastSeenMs);
-            for (let session of others) {
-                this._close(session, session.lastSeenMs);
+        // A session dropped as it closes (under a minute - see _close())
+        // still changes the store, but leaves nothing to announce.
+        let interrupt = session => {
+            changed = true;
+            if (this._close(session, session.lastSeenMs)) {
                 session.interrupted = true;
                 interrupted.push(session);
             }
+        };
+
+        if (resumed) {
+            open.filter(s => s !== resumed)
+                .sort((a, b) => a.lastSeenMs - b.lastSeenMs)
+                .forEach(interrupt);
             resumed.lastSeenMs = nowMs;
             changed = true;
         } else {
             open.sort((a, b) => a.lastSeenMs - b.lastSeenMs);
             let mostRecent = open.pop();
 
-            for (let session of open) {
-                this._close(session, session.lastSeenMs);
-                session.interrupted = true;
-                interrupted.push(session);
-            }
+            open.forEach(interrupt);
 
             let withinGap = nowMs - mostRecent.lastSeenMs < RESUME_GAP_MS;
-            if (!withinGap) {
-                this._close(mostRecent, mostRecent.lastSeenMs);
-                mostRecent.interrupted = true;
-                interrupted.push(mostRecent);
-            }
-            changed = interrupted.length > 0;
+            if (!withinGap)
+                interrupt(mostRecent);
         }
 
         if (!changed)
@@ -782,10 +800,18 @@ export class ClockStore {
     // fine. Every _close() caller already passes a value that is either
     // nowMs or the session's own already-valid lastSeenMs, so this only
     // ever engages on that one clock-step scenario.
+    //
+    // Every way a session ends comes through here, so this is also where a
+    // session under a minute is dropped (see isNoise()). Returns whether the
+    // session was kept.
     _close(session, endMs) {
         let clampedEndMs = Math.max(endMs, session.startMs);
         session.endMs = clampedEndMs;
         session.lastSeenMs = clampedEndMs;
+        if (!isNoise(session))
+            return true;
+        this._sessions.splice(this._sessions.indexOf(session), 1);
+        return false;
     }
 
     sessionsForDay(dayKey) {

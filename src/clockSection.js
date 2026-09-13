@@ -1,7 +1,9 @@
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
+import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { recentClients } from './clients.js';
 import { todayKeyFor } from './usageStore.js';
 
@@ -45,32 +47,41 @@ export class ClockSection {
             item.track_hover = false;
             item.style = 'padding: 0;';
 
-            let row = new St.BoxLayout({x_expand: true, style: 'padding: 4px 12px;'});
+            // Laid out like the usage rows above (usageRows.js): the same
+            // content width and font sizes, so the two lists line up.
+            let row = new St.BoxLayout({style: `padding: 4px 10px; width: ${ROW_W}px;`});
 
-            let dot = new St.Label({
-                text: isRunning ? '●' : '○',
-                style_class: isRunning ? 'clock-dot-running' : 'clock-dot-idle',
-                y_align: Clutter.ActorAlign.CENTER,
+            // Every row reserves the dot's space, so the names line up
+            // whichever client is running. Purple, like the clock card.
+            row.add_child(new St.Label({
+                text: '●',
                 opacity: isRunning ? 255 : 0,
-            });
-            row.add_child(dot);
+                y_align: Clutter.ActorAlign.CENTER,
+                style: 'font-size: 8px; padding-right: 6px; color: #c061cb;',
+            }));
 
             let label = new St.Label({
-                text: name, x_expand: true, y_align: Clutter.ActorAlign.CENTER,
+                text: name,
+                x_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+                style: `font-size: 11px; font-weight: ${isRunning ? 700 : 500};`,
             });
+            label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
             row.add_child(label);
 
             let secs = byClient.get(name) ?? 0;
             row.add_child(new St.Label({
                 text: secs > 0 ? formatTime(secs) : '—',
-                style_class: 'clock-row-time',
+                opacity: DIM_OPACITY,
                 y_align: Clutter.ActorAlign.CENTER,
+                style: 'font-size: 10px; padding-left: 8px;',
             }));
 
             let btn = new St.Button({
                 child: row,
                 can_focus: true,
-                style: 'width: 100%; padding: 0;',
+                x_expand: true,
+                style_class: 'screen-time-clock-row',
             });
             btn.connect('clicked', () => {
                 // Re-derived here rather than closed over `isRunning`: the

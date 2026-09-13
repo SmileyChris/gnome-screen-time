@@ -23,3 +23,17 @@
 .screen-time-card {
     transition-duration: 150ms;
 }
+
+/* A client row in the popup's clock list; tapping it clocks in or out. */
+.screen-time-clock-row {
+    border-radius: 6px;
+    transition-duration: 150ms;
+}
+
+.screen-time-clock-row:hover {
+    background-color: rgba(128, 128, 128, 0.25);
+}
+
+.screen-time-clock-row:active {
+    background-color: rgba(128, 128, 128, 0.4);
+}

@@ -2,6 +2,7 @@ import Adw from 'gi://Adw?version=1';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
+import Pango from 'gi://Pango';
 
 // The Timesheet is a separate process from the Shell, so its D-Bus proxy is
 // built from the same XML the Shell exports rather than a pasted second
@@ -15,6 +16,32 @@ import { parseClock } from './clockTime.js';
 import { HoursBinding, saveFields } from './timesheetDraft.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
+
+// The Bill row's heading. One helper, since _tickLive() rewrites it while a
+// session runs.
+function billHeading(hours) {
+    return `Bill · ${hours.toFixed(2)} h on the clock`;
+}
+
+// One compact line of the Activities block: name on the left, hours on the
+// right, indented and dimmed below the app it belongs to.
+function activityLine(name, seconds, depth) {
+    let line = new Gtk.Box({ spacing: 12, margin_start: depth * 16 });
+    line.append(new Gtk.Label({
+        label: name,
+        xalign: 0,
+        hexpand: true,
+        ellipsize: Pango.EllipsizeMode.END,
+        css_classes: ['caption'],
+    }));
+    line.append(new Gtk.Label({
+        label: formatHours(seconds / 3600),
+        css_classes: ['caption', 'numeric'],
+    }));
+    if (depth > 0)
+        line.add_css_class('dim-label');
+    return line;
+}
 
 // billedHours may be legitimately 0, so this must never be a truthiness
 // check - a deliberately zeroed session would otherwise display its actual
@@ -177,9 +204,11 @@ export class TimesheetWindow {
         // a clock from the panel, another session's Save). Both are owned
         // by the window, not by the widgets they seed, and survive the
         // rebuild: _drafts carries unsaved edits per session id, and
-        // _expandedIds carries which rows should come back open.
+        // _expandedIds carries which rows should come back open, and
+        // _activitiesOpen which of their Activities blocks.
         this._drafts = new Map();
         this._expandedIds = new Set();
+        this._activitiesOpen = new Set();
         // session id -> live-row bookkeeping for _tickLive(), rebuilt by
         // refresh() on every pass (see there) since the rows themselves are
         // rebuilt too. Ticked on its own timer, independent of ClockChanged
@@ -437,13 +466,13 @@ export class TimesheetWindow {
         // figures go stale between refreshes (nothing mutates the clock
         // just because time passes, so nothing fires ClockChanged to
         // trigger a refresh() on its own), so only these get an entry.
-        // hoursRow/hours/draft start null and are filled in by
+        // clockLabel/hours/draft start null and are filled in by
         // _fillEvidence()/_adjustRows() below once the row is actually
         // expanded - until then there is nothing more for a tick to
         // update than the subtitle already covers.
         let live = null;
         if (session.endMs === null) {
-            live = { session, row, hoursRow: null, hours: null, draft: null };
+            live = { session, row, clockLabel: null, hours: null, draft: null };
             this._liveRows.set(session.id, live);
         }
 
@@ -500,25 +529,10 @@ export class TimesheetWindow {
             return;
         }
 
-        for (let entry of evidence.entries)
-            row.add_row(this._entryRow(entry));
-
-        if (evidence.unattributedSeconds > 0) {
-            let unattributed = new Adw.ActionRow({
-                title: 'Unattributed',
-                subtitle: 'No focused window, or away. Undercounts a walk-away by up to one idle timeout.',
-                css_classes: ['dim-label'],
-            });
-            unattributed.add_suffix(new Gtk.Label({
-                label: formatHours(evidence.unattributedSeconds / 3600),
-            }));
-            row.add_row(unattributed);
-        }
-
         // One draft per session backs the Started/Ended fields below and
         // the Note/Bill fields in _adjustRows, so all five widgets agree on
         // what the user has and hasn't touched yet.
-        let draft = this._draftFor(session, evidence);
+        let draft = this._draftFor(session);
         if (live)
             live.draft = draft;
 
@@ -526,8 +540,13 @@ export class TimesheetWindow {
         if (session.endMs !== null)
             row.add_row(this._timeRow(session, evidence, draft, 'end'));
 
-        for (let adjustRow of this._adjustRows(session, evidence, draft, live))
-            row.add_row(adjustRow);
+        // Activities sit between Bill and Note: the evidence for adjusting
+        // the one and for writing the other.
+        let [billRow, noteRow] = this._adjustRows(session, evidence, draft, live);
+        row.add_row(billRow);
+        if (evidence.entries.length > 0 || evidence.unattributedSeconds > 0)
+            row.add_row(this._activityRow(session, evidence));
+        row.add_row(noteRow);
     }
 
     // Epoch ms -> "HH:MM" and back, resolved against the session's own day so
@@ -629,24 +648,50 @@ export class TimesheetWindow {
         return best;
     }
 
-    // One line per app, with its activities nested below it.
-    _entryRow(entry) {
-        let children = entry.children ? Object.entries(entry.children) : [];
-        if (children.length === 0) {
-            let leaf = new Adw.ActionRow({ title: entry.displayName });
-            leaf.add_suffix(new Gtk.Label({ label: formatHours(entry.seconds / 3600) }));
-            return leaf;
+    // The session's recorded activity as one compact block under a
+    // collapsible "Activities" heading, rather than a full-height row per
+    // app: one small line per app, with its activities (and theirs)
+    // indented below it, biggest first. Collapsed until opened, and kept
+    // open across refresh() the same way an expanded session row is (see
+    // _sessionRow).
+    _activityRow(session, evidence) {
+        let lines = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 2,
+            margin_top: 4,
+        });
+        let add = (node, depth) => {
+            lines.append(activityLine(node.displayName, node.seconds, depth));
+            Object.values(node.children ?? {})
+                .sort((a, b) => b.seconds - a.seconds)
+                .forEach(child => add(child, depth + 1));
+        };
+        for (let entry of evidence.entries)
+            add(entry, 0);
+        if (evidence.unattributedSeconds > 0) {
+            let unattributed = activityLine('Unattributed', evidence.unattributedSeconds, 0);
+            unattributed.add_css_class('dim-label');
+            unattributed.tooltip_text = 'No focused window, or away. ' +
+                'Undercounts a walk-away by up to one idle timeout.';
+            lines.append(unattributed);
         }
-        let branch = new Adw.ExpanderRow({ title: entry.displayName });
-        branch.add_suffix(new Gtk.Label({ label: formatHours(entry.seconds / 3600) }));
-        children
-            .sort((a, b) => b[1].seconds - a[1].seconds)
-            .forEach(([, node]) => branch.add_row(this._entryRow({
-                displayName: node.displayName,
-                seconds: node.seconds,
-                children: node.children ?? null,
-            })));
-        return branch;
+
+        let expander = new Gtk.Expander({
+            label_widget: new Gtk.Label({
+                label: 'Activities',
+                css_classes: ['caption', 'dim-label'],
+            }),
+            child: lines,
+            expanded: this._activitiesOpen.has(session.id),
+            margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
+        });
+        expander.connect('notify::expanded', () => {
+            if (expander.expanded)
+                this._activitiesOpen.add(session.id);
+            else
+                this._activitiesOpen.delete(session.id);
+        });
+        return new Adw.PreferencesRow({ activatable: false, child: expander });
     }
 
     // Gets or creates the draft for `session` (this._drafts, keyed by
@@ -671,10 +716,7 @@ export class TimesheetWindow {
     // in-progress edit, not something to overwrite - and clearing dirty on
     // a successful save is exactly what hands the field back to being
     // re-seeded here.
-    _draftFor(session, evidence) {
-        let seededNote = session.description.length > 0
-            ? session.description
-            : evidence.entries.slice(0, 2).map(e => e.displayName).join('; ');
+    _draftFor(session) {
         let draft = this._drafts.get(session.id);
         if (!draft) {
             draft = {
@@ -684,7 +726,7 @@ export class TimesheetWindow {
             this._drafts.set(session.id, draft);
         }
         if (!draft.noteDirty)
-            draft.note = seededNote;
+            draft.note = session.description;
         if (!draft.hoursDirty)
             draft.hours = hoursOf(session);
         if (!draft.startDirty)
@@ -704,10 +746,9 @@ export class TimesheetWindow {
     // last-saved values.
     _adjustRows(session, evidence, draft, live) {
         let noteRow = new Adw.EntryRow({ title: 'Note' });
-        // Seeded from the top activities, never auto-filled onto an
-        // invoice: those strings are repository names, hostnames and
-        // subreddits. The seed only reaches Save's payload if the user
-        // actually edits this field - see noteDirty below.
+        // Starts from the session's saved note only, never from the
+        // activities above: those are repository names, hostnames and
+        // subreddits, not something to put on an invoice.
         noteRow.text = draft.note;
 
         let hours = new Gtk.SpinButton({
@@ -742,19 +783,21 @@ export class TimesheetWindow {
         let useActual = new Gtk.Button({ label: 'Use actual', css_classes: ['flat'] });
         useActual.connect('clicked', () => this._updateSession(session, { billedHours: null }));
 
-        let box = new Gtk.Box({ spacing: 6, valign: Gtk.Align.CENTER });
-        box.append(useActual);
-        box.append(hours);
+        let controls = new Gtk.Box({ spacing: 6 });
+        controls.append(useActual);
+        controls.append(hours);
         for (let [label, delta] of [['¼', 0.25], ['½', 0.5], ['+1', 1]]) {
             let button = new Gtk.Button({ label, css_classes: ['flat'] });
             button.connect('clicked', () => { hours.value += delta; });
-            box.append(button);
+            controls.append(button);
         }
         let round = new Gtk.Button({ label: 'Round', css_classes: ['flat'] });
         round.connect('clicked', () => {
             hours.value = Math.round(hours.value * 4) / 4;
         });
-        box.append(round);
+        controls.append(round);
+        // Save sits at the far end, well away from "Use actual".
+        controls.append(new Gtk.Box({ hexpand: true }));
 
         let save = new Gtk.Button({ label: 'Save', css_classes: ['suggested-action'] });
         save.connect('clicked', () => {
@@ -766,26 +809,38 @@ export class TimesheetWindow {
             }
             this._updateSession(session, fields);
         });
-        box.append(save);
+        controls.append(save);
 
-        let hoursRow = new Adw.ActionRow({
-            title: 'Bill',
-            subtitle: `${(evidence.spanSeconds / 3600).toFixed(2)} h on the clock`,
+        // Two lines of its own - the heading, then the controls - rather
+        // than an ActionRow suffix, which squeezed the title into a sliver
+        // beside this many controls. The heading matches the Started,
+        // Ended and Note titles.
+        let heading = new Gtk.Label({
+            label: billHeading(evidence.spanSeconds / 3600),
+            xalign: 0,
+            css_classes: ['caption', 'dim-label'],
         });
-        hoursRow.add_suffix(box);
+        let billBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
+        });
+        billBox.append(heading);
+        billBox.append(controls);
+        let billRow = new Adw.PreferencesRow({ activatable: false, child: billBox });
 
         // Handed to _tickLive() (only non-null for a still-running
-        // session - see _sessionRow): this "X h on the clock" subtitle and
+        // session - see _sessionRow): this heading's "X h on the clock" and
         // the spin button's value are exactly the two figures that
         // otherwise freeze at whatever they were on expand, per the class
         // comment on _draftFor.
         if (live) {
-            live.hoursRow = hoursRow;
+            live.clockLabel = heading;
             live.hours = hours;
             live.binding = binding;
         }
 
-        return [hoursRow, noteRow];
+        return [billRow, noteRow];
     }
 
     // Recomputes every currently-running session's row locally, every
@@ -798,11 +853,11 @@ export class TimesheetWindow {
     // value - never a rebuild.
     _tickLive() {
         for (let live of this._liveRows.values()) {
-            let { session, row, hoursRow, hours, binding, draft } = live;
+            let { session, row, clockLabel, hours, binding, draft } = live;
             row.subtitle = sessionSubtitle(session);
-            if (!hoursRow || !hours || !binding || !draft)
+            if (!clockLabel || !hours || !binding || !draft)
                 continue;   // not expanded (yet): nothing else to refresh
-            hoursRow.subtitle = `${actualHoursOf(session).toFixed(2)} h on the clock`;
+            clockLabel.label = billHeading(actualHoursOf(session));
             // hoursOf() returns the fixed billedHours override unchanged
             // when one is set, and the live elapsed time otherwise - the
             // same rule _draftFor() re-seeds an untouched draft with, so a

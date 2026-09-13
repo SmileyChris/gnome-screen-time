@@ -36,10 +36,21 @@ function tierFor(seconds) {
     return USAGE_TIERS.find(t => seconds < t.limit) ?? USAGE_TIERS.at(-1);
 }
 
+// The clock card's colour says whether a billable clock is running: purple
+// while one is (no usage tier is purple), neutral gray otherwise. Each
+// lightens on hover, like the usage tiers.
+const CLOCK_RUNNING = {from: '#dc8add', to: '#c061cb', hoverFrom: '#ebb6ea', hoverTo: '#dc8add'};
+const CLOCK_STOPPED = {from: '#deddda', to: '#c0bfbc', hoverFrom: '#f6f5f4', hoverTo: '#deddda'};
+
+// Both cards stack the same three lines, so their rows line up.
+const TITLE_STYLE = 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';';
+const FIGURE_STYLE = 'font-size: 17px; font-weight: 800; color: ' + CARD_FG + ';';
+const CAPTION_STYLE = 'font-size: 9px; color: ' + CARD_FG + ';';
+
 function cardStyle(tier, hover) {
     let from = hover ? tier.hoverFrom : tier.from;
     let to = hover ? tier.hoverTo : tier.to;
-    return 'margin: 4px 10px 2px 10px; padding: 10px 14px; border-radius: 14px; ' +
+    return 'padding: 10px 12px; border-radius: 14px; ' +
            'background-gradient-direction: vertical; ' +
            'background-gradient-start: ' + from + '; ' +
            'background-gradient-end: ' + to + ';';
@@ -228,164 +239,128 @@ export class PopupWidget {
         item.track_hover = false;
         item.style = 'padding: 0;';
 
-        let tier = tierFor(total);
-        let card = new St.BoxLayout({
+        // Two cards side by side, kept the same width whatever each holds.
+        let cards = new St.Widget({
             x_expand: true,
-            style_class: 'screen-time-card',
-            style: cardStyle(tier, false),
+            layout_manager: new Clutter.BoxLayout({homogeneous: true, spacing: 8}),
+            style: 'margin: 4px 10px 2px 10px;',
         });
 
-        // Left half: screen time, and the existing tap-to-flip-bars target.
-        // Only this half is reactive/hover-tracked - see below.
-        let left = new St.BoxLayout({
+        // Left card: screen time, and the existing tap-to-flip-bars target.
+        let tier = tierFor(total);
+        let screen = new St.BoxLayout({
+            vertical: true,
             x_expand: true,
             reactive: true,
             track_hover: true,
+            style_class: 'screen-time-card',
+            style: cardStyle(tier, false),
         });
-        let titles = new St.BoxLayout({ vertical: true, y_align: Clutter.ActorAlign.CENTER });
-        titles.add_child(new St.Label({
-            text: 'Total Screen Time',
-            style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';',
+        screen.add_child(new St.Label({text: 'Screen Time', style: TITLE_STYLE}));
+        screen.add_child(new St.Label({
+            text: total > 0 ? formatTime(total) : '0m',
+            style: FIGURE_STYLE,
         }));
-        titles.add_child(new St.Label({
+        screen.add_child(new St.Label({
             text: this._percentBasis() === 'largest' ? 'bars: of largest' : 'bars: of total',
             opacity: DIM_OPACITY,
-            style: 'font-size: 9px; color: ' + CARD_FG + ';',
+            style: CAPTION_STYLE,
         }));
-        left.add_child(titles);
-        left.add_child(new St.BoxLayout({x_expand: true}));
-        left.add_child(new St.Label({
-            text: total > 0 ? formatTime(total) : '0m',
-            y_align: Clutter.ActorAlign.CENTER,
-            style: 'font-size: 17px; font-weight: 800; color: ' + CARD_FG + ';',
-        }));
-        card.add_child(left);
-
-        card.add_child(new St.Widget({
-            style: 'width: 1px; margin: 0 10px; background-color: ' + CARD_FG + '33;',
-        }));
-
-        // Right half: the clock, reflecting the day on screen rather than
-        // always today. The clock rows section hides itself on any day but
-        // today for the same reason (a live control mixed with another
-        // day's numbers is misleading) - see _build()'s call to
-        // _clockSection.build(). Deliberately not tappable as a whole: two
-        // tap targets with different meanings on one card means a mis-tap
-        // could start a billable clock, so only the explicit Start/Stop
-        // button below acts.
-        let isToday = this._date === todayKeyFor(this._settings);
-        let running = isToday ? (this._clock?.running ?? null) : null;
-        let clockBox = new St.BoxLayout({ vertical: true, y_align: Clutter.ActorAlign.CENTER });
-        if (isToday) {
-            // Client names are free-form and unbounded, unlike every other
-            // label in this card - a long one must not stretch clockBox
-            // (and so the card, and so the popup) past ROW_W. Capped to
-            // roughly a third of ROW_W, leaving room for the screen-time
-            // half, the divider and the Start/Stop button; clockBox itself
-            // has no explicit width, so once this label's natural width is
-            // capped, clockBox's own natural width shrinks with it instead
-            // of growing to fit the untruncated text. The full name stays
-            // visible in the clock rows below (ClockSection), which already
-            // ellipsize the same way.
-            let clientLabel = new St.Label({
-                text: running ? running.client : 'Not clocked',
-                x_expand: true,
-                style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';' +
-                       ` max-width: ${Math.round(ROW_W / 3)}px;`,
-            });
-            clientLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
-            clockBox.add_child(clientLabel);
-            let billedToday = this._clock ? this._clock.billedSecondsForDay(this._date) : 0;
-            clockBox.add_child(new St.Label({
-                text: billedToday > 0 ? `today ${formatTime(billedToday)}` : '—',
-                opacity: DIM_OPACITY,
-                style: 'font-size: 9px; color: ' + CARD_FG + ';',
-            }));
-        } else {
-            // An earlier day has no running client and no Start/Stop button
-            // to run - just that day's already-billed total.
-            clockBox.add_child(new St.Label({
-                text: 'Billed',
-                style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';',
-            }));
-            let billedDay = this._clock ? this._clock.billedSecondsForDay(this._date) : 0;
-            clockBox.add_child(new St.Label({
-                text: billedDay > 0 ? formatTime(billedDay) : '—',
-                opacity: DIM_OPACITY,
-                style: 'font-size: 9px; color: ' + CARD_FG + ';',
-            }));
-        }
-        card.add_child(clockBox);
-        card.add_child(new St.BoxLayout({x_expand: true}));
-
-        if (isToday) {
-            // Nothing to start with no session running and no client ever
-            // clocked in (a fresh install, or before any client has been
-            // clocked), or with last-client naming one since deleted from
-            // Preferences (see clients.js's isKnownClient): render the
-            // button insensitive and dimmed rather than a live control that
-            // does nothing when pressed - the same convention the date-nav
-            // arrows use above.
-            let canStart = !!this._clock &&
-                (running !== null || isKnownClient(this._settings, this._settings.get_string('last-client')));
-            let toggle = new St.Button({
-                style: 'padding: 4px 10px; border-radius: 9px; font-weight: 700; ' +
-                       'color: ' + CARD_FG + '; border: 1px solid ' + CARD_FG + '55;',
-                label: running ? 'Stop' : 'Start',
-                y_align: Clutter.ActorAlign.CENTER,
-                reactive: canStart,
-                can_focus: canStart,
-                // Same disabled dimming as _navButton()'s arrows, so every
-                // disabled control in this popup looks the same.
-                opacity: canStart ? 255 : 55,
-            });
-            if (canStart) {
-                toggle.connect('clicked', () => {
-                    try {
-                        // Re-derived here rather than closed over `running`:
-                        // the panel/shortcut can change the clock while the
-                        // popup is still open (see ClockSection.build()).
-                        let live = this._clock.running;
-                        if (live) {
-                            this._clock.stop();
-                        } else {
-                            let last = this._settings.get_string('last-client');
-                            if (!isKnownClient(this._settings, last))
-                                return;
-                            this._clock.start(last);
-                        }
-                    } catch (e) {
-                        // start()/stop() throw when the system clock is out
-                        // of range; the popup has no toast, so log and let
-                        // the rebuild show whatever state actually landed.
-                        console.error(`[ScreenTime] clock toggle failed: ${e.message}`);
-                    } finally {
-                        this._build();
-                    }
-                });
-            }
-            card.add_child(toggle);
-        }
-
         // The gradient is per-usage and therefore inline, which outranks any
         // stylesheet :hover rule, so the hover swap is done here instead.
-        // Tracked on the left half only, now that the right half has its
-        // own explicit button: hovering anywhere on the card used to
-        // highlight it, which would wrongly suggest the clock half is
-        // tappable too.
-        left.connect('notify::hover', () => {
-            card.style = cardStyle(tier, left.hover);
+        screen.connect('notify::hover', () => {
+            screen.style = cardStyle(tier, screen.hover);
         });
-        // Clicking the left half flips what the row percentages compare
-        // against; the right half is not a tap target (see above).
-        left.connect('button-release-event', () => {
+        // Clicking it flips what the row percentages compare against.
+        screen.connect('button-release-event', () => {
             this._settings.set_string('percent-basis',
                 this._percentBasis() === 'largest' ? 'total' : 'largest');
             this._build();
             return Clutter.EVENT_STOP;
         });
+        cards.add_child(screen);
 
-        item.add_child(card);
+        // Right card: the clock, reflecting the day on screen rather than
+        // always today. The clock rows section hides itself on any day but
+        // today for the same reason (a live control mixed with another
+        // day's numbers is misleading) - see _build()'s call to
+        // _clockSection.build(). Tapping it stops the running clock, or
+        // starts the last client again.
+        let isToday = this._date === todayKeyFor(this._settings);
+        let running = isToday ? (this._clock?.running ?? null) : null;
+        let billed = this._clock ? this._clock.billedSecondsForDay(this._date) : 0;
+        // Nothing to toggle on an earlier day, or with no session running
+        // and no client ever clocked in (a fresh install, or before any
+        // client has been clocked), or with last-client naming one since
+        // deleted from Preferences (see clients.js's isKnownClient): the
+        // card is then not reactive and has no hover highlight, rather than
+        // a live control that does nothing when pressed.
+        let canToggle = isToday && !!this._clock &&
+            (running !== null || isKnownClient(this._settings, this._settings.get_string('last-client')));
+        let clockTier = running ? CLOCK_RUNNING : CLOCK_STOPPED;
+        let clock = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            reactive: canToggle,
+            track_hover: canToggle,
+            style_class: 'screen-time-card',
+            style: cardStyle(clockTier, false),
+        });
+
+        // Client names are free-form and unbounded, unlike every other
+        // label on these cards - a long one must not widen this card, and
+        // with it (the cards share one width) the popup, past ROW_W. Capped
+        // to what half of ROW_W leaves after the cards' padding and gap;
+        // the full name stays visible in the clock rows below
+        // (ClockSection), which ellipsize the same way. An earlier day has
+        // no running client, just that day's already-billed total.
+        let title = new St.Label({
+            text: !isToday ? 'Project Time' : running ? running.client : 'Not clocked',
+            style: TITLE_STYLE + ` max-width: ${Math.round(ROW_W / 2) - 36}px;`,
+        });
+        title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        clock.add_child(title);
+
+        clock.add_child(new St.Label({
+            text: billed > 0 ? formatTime(billed) : '0m',
+            style: FIGURE_STYLE,
+        }));
+
+        if (canToggle) {
+            // Same inline-gradient hover swap as the screen time card.
+            clock.connect('notify::hover', () => {
+                clock.style = cardStyle(clockTier, clock.hover);
+            });
+            clock.connect('button-release-event', () => {
+                try {
+                    // Re-derived here rather than closed over `running`:
+                    // the panel/shortcut can change the clock while the
+                    // popup is still open (see ClockSection.build()).
+                    let last = this._settings.get_string('last-client');
+                    if (this._clock.running)
+                        this._clock.stop();
+                    else if (isKnownClient(this._settings, last))
+                        this._clock.start(last);
+                } catch (e) {
+                    // start()/stop() throw when the system clock is out of
+                    // range; the popup has no toast, so log and let the
+                    // rebuild show whatever state actually landed.
+                    console.error(`[ScreenTime] clock toggle failed: ${e.message}`);
+                } finally {
+                    this._build();
+                }
+                return Clutter.EVENT_STOP;
+            });
+        }
+
+        clock.add_child(new St.Label({
+            text: isToday ? 'billed today' : 'billed',
+            opacity: DIM_OPACITY,
+            style: CAPTION_STYLE,
+        }));
+        cards.add_child(clock);
+
+        item.add_child(cards);
         this._menu.addMenuItem(item);
     }
 
