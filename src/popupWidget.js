@@ -36,7 +36,7 @@ function tierFor(seconds) {
     return USAGE_TIERS.find(t => seconds < t.limit) ?? USAGE_TIERS.at(-1);
 }
 
-// The clock card's colour says whether a billable clock is running: purple
+// The clock card's colour says whether the clock is running: purple
 // while one is (no usage tier is purple), neutral gray otherwise. Each
 // lightens on hover, like the usage tiers.
 const CLOCK_RUNNING = {from: '#dc8add', to: '#c061cb', hoverFrom: '#ebb6ea', hoverTo: '#dc8add'};
@@ -289,7 +289,7 @@ export class PopupWidget {
         // Running: the client and its own time today, with a pause button.
         // Paused (no session, but last-client names a client to resume):
         // the same, with stop and play buttons. Stopped, or any earlier day:
-        // the day's billed total, no buttons. Stop forgets last-client, so
+        // the day's clocked total, no buttons. Stop forgets last-client, so
         // nothing can resume it and the panel stops showing a total (see
         // panelMode.js). Tapping the card itself pauses or resumes, like
         // the pause and play buttons.
@@ -327,7 +327,7 @@ export class PopupWidget {
         // that width, so each takes its own share off the cap.
         let titleRow = new St.BoxLayout({style: 'spacing: 2px;'});
         let title = new St.Label({
-            text: client ?? (isToday ? 'Billed today' : 'Billed'),
+            text: client ?? (isToday ? 'Clocked today' : 'Clocked'),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });

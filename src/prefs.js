@@ -482,19 +482,17 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
     }
 
     // The client list is the only place clients get created: the popup
-    // cannot take text input sanely. Non-billable clients (personal work,
-    // this extension itself) stay listed and trackable; the Billable switch
-    // only controls whether export later includes them. Active is the only
-    // way to retire a client short of deleting it outright: recentClients()
-    // (clients.js) excludes an inactive client from the popup's padding, but
+    // cannot take text input sanely. Active is the only way to retire a
+    // client short of deleting it outright: recentClients() (clients.js)
+    // excludes an inactive client from the popup's padding, but
     // selectExportable() (timeExport.js) keeps it exportable regardless, so
     // turning a client inactive - rather than deleting it - is how its
     // history stays reachable from a later export.
     _addClientsGroup(page, settings, window) {
         const clientsGroup = new Adw.PreferencesGroup({
             title: 'Clients',
-            description: 'Who the clock can bill time to. Non-billable clients are tracked but ' +
-                'left out of exports; inactive ones stay out of the popup but stay exportable.',
+            description: 'Clients the clock tracks time for. Inactive ones stay out of the popup ' +
+                'but still export.',
         });
         page.add(clientsGroup);
 
@@ -518,17 +516,6 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                     writeClients(settings, next);
                 });
                 row.add_suffix(active);
-
-                let billable = new Gtk.Switch({
-                    active: client.billable, valign: Gtk.Align.CENTER,
-                    tooltip_text: 'Billable',
-                });
-                billable.connect('notify::active', () => {
-                    let next = readClients(settings);
-                    next[i].billable = billable.active;
-                    writeClients(settings, next);
-                });
-                row.add_suffix(billable);
 
                 // Deleting is the only way to make a client's name stop
                 // resolving at all: selectExportable() and mergeSessions()
@@ -577,7 +564,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                 let next = readClients(settings);
                 if (next.some(c => c.name === name))
                     return;
-                next.push({ name, active: true, billable: true });
+                next.push({ name, active: true });
                 writeClients(settings, next);
                 addRow.text = '';
                 renderClients();

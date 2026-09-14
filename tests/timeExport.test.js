@@ -2,10 +2,10 @@ import { test, assertEqual } from './harness.js';
 import { EXTERNAL_ID_PREFIX, mergeSessions, selectExportable, countSkippedUnknown, toCSV, toJSON } from '../src/timeExport.js';
 
 const CLIENTS = [
-    { name: 'ACME', active: true, billable: true },
-    { name: 'BETA', active: true, billable: true },
-    { name: 'Self', active: true, billable: false },
-    { name: 'A:B', active: true, billable: true },
+    { name: 'ACME', active: true },
+    { name: 'BETA', active: true },
+    { name: 'Self', active: false },
+    { name: 'A:B', active: true },
 ];
 
 function session(over) {
@@ -107,12 +107,12 @@ test('mergeSessions: different days stay separate', () => {
     ]);
 });
 
-test('mergeSessions: non-billable clients are excluded', () => {
+test('mergeSessions: every client on the list is exported, inactive ones included', () => {
     let rows = mergeSessions([
         session({ id: 'a', client: 'ACME' }),
-        session({ id: 'b', client: 'Self' }),
+        session({ id: 'b', client: 'Self' }),              // inactive
     ], CLIENTS);
-    assertEqual(rows.map(r => r.client), ['ACME']);
+    assertEqual(rows.map(r => r.client), ['ACME', 'Self']);
 });
 
 test('mergeSessions: a client not on the list is excluded', () => {
@@ -160,8 +160,8 @@ test('mergeSessions: ordering is code-point, not locale-aware (case-sensitive)',
     // deterministic: plain code-point comparison always puts 'B' (0x42)
     // before 'a' (0x61).
     let clients = [
-        { name: 'B', active: true, billable: true },
-        { name: 'a', active: true, billable: true },
+        { name: 'B', active: true },
+        { name: 'a', active: true },
     ];
     let rows = mergeSessions([
         session({ id: 'x', client: 'a' }),
@@ -205,13 +205,13 @@ test('mergeSessions: a client name containing \':\' keeps external_id parseable'
 // exported", shared by mergeSessions() and ClockDBus.ExportPeriod's
 // exportedAt stamping. A real bug: ExportPeriod used to stamp every session
 // in the period, including ones mergeSessions had silently dropped (a
-// non-billable client, say) - these tests pin the two down to agreeing by
+// deleted client, say) - these tests pin the two down to agreeing by
 // construction, not just by inspection.
 
-test('selectExportable: excludes a non-billable client', () => {
+test('selectExportable: includes every client on the list, inactive ones included', () => {
     let picked = selectExportable(
         [session({ id: 'a', client: 'ACME' }), session({ id: 'b', client: 'Self' })], CLIENTS);
-    assertEqual(picked.map(s => s.id), ['a']);
+    assertEqual(picked.map(s => s.id), ['a', 'b']);
 });
 
 test('selectExportable: excludes a client not on the list', () => {
@@ -232,7 +232,7 @@ test('selectExportable: excludes a session with endMs before startMs', () => {
 test('selectExportable: mergeSessions(all) equals mergeSessions(selectExportable(all)) for a mixed set', () => {
     let all = [
         session({ id: 'a', client: 'ACME' }),
-        session({ id: 'b', client: 'Self' }),              // non-billable
+        session({ id: 'b', client: 'Self' }),              // inactive
         session({ id: 'c', client: 'Ghost' }),              // unknown client
         session({ id: 'd', endMs: null }),                  // running
         session({ id: 'e', startMs: 3600000, endMs: 0 }),   // negative duration
@@ -251,12 +251,12 @@ test('countSkippedUnknown: counts a closed session whose client is not on the li
     assertEqual(count, 1);
 });
 
-test('countSkippedUnknown: does not count a non-billable client - that exclusion is deliberate', () => {
+test('countSkippedUnknown: does not count an inactive client', () => {
     let count = countSkippedUnknown([session({ client: 'Self' })], CLIENTS);
     assertEqual(count, 0);
 });
 
-test('countSkippedUnknown: does not count a known billable client', () => {
+test('countSkippedUnknown: does not count a known client', () => {
     let count = countSkippedUnknown([session({ client: 'ACME' })], CLIENTS);
     assertEqual(count, 0);
 });

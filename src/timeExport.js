@@ -8,11 +8,9 @@
 // receiving side is left stale until handled there or by hand:
 //   - every session for a client-day is deleted (no row is emitted for that
 //     day at all, not even a zero one, so a previously-sent row lingers);
-//   - a client is made non-billable after already being exported (its
-//     sessions stop producing rows, so its old rows are never zeroed);
 //   - a client is renamed (a new name means a new external_id, orphaning
 //     the row filed under the old one).
-// A client-day that merges to 0 billable hours (e.g. a session corrected to
+// A client-day that merges to 0 hours (e.g. a session corrected to
 // billedHours: 0) is different from these: it still has a row and is still
 // exported, with hours: 0, so the receiving side's total is corrected
 // rather than left stuck at whatever it was before.
@@ -47,22 +45,23 @@ function compareStrings(a, b) {
     return a < b ? -1 : a > b ? 1 : 0;
 }
 
-// Exactly the sessions mergeSessions() turns into a row: closed, a known
-// billable client, non-negative duration. Exported so a caller that also
+// Exactly the sessions mergeSessions() turns into a row: closed, a client
+// still on the list (active or not), non-negative duration. Exported so a
+// caller that also
 // needs to know *which* sessions were actually exported — ClockDBus's
 // ExportPeriod, to stamp exportedAt only on those — reads the same rule
 // mergeSessions applies internally, rather than re-deriving it and risking
 // the two drifting apart. That drift was a real bug: ExportPeriod used to
 // stamp every session in the period, including ones mergeSessions had
-// silently dropped (a non-billable client, say), so a session that never
+// silently dropped (a deleted client, say), so a session that never
 // appeared in the exported file still ended up marked "· exported" in the
 // Timesheet.
 export function selectExportable(sessions, clients) {
-    let billable = new Set(clients.filter(c => c.billable).map(c => c.name));
+    let known = new Set(clients.map(c => c.name));
     return sessions.filter(session => {
         if (session.endMs === null || session.endMs === undefined)
             return false;
-        if (!billable.has(session.client))
+        if (!known.has(session.client))
             return false;
         // A session whose endMs precedes its startMs has a negative
         // duration. update() and clockStore's load-time validation both
@@ -74,16 +73,14 @@ export function selectExportable(sessions, clients) {
     });
 }
 
-// Closed sessions in `sessions` whose client isn't on the list at all -
-// active or not, billable or not. Deliberately narrower than "excluded by
-// selectExportable()": a non-billable client's sessions are excluded there
-// on purpose (see the module comment above), and are not counted here.
-// An unknown client usually means it was deleted from Preferences (see
+// Closed sessions in `sessions` whose client isn't on the list at all,
+// active or not: the ones selectExportable() drops for their client. An
+// unknown client usually means it was deleted from Preferences (see
 // prefs.js's confirm-delete dialog and clients.js's isKnownClient) after
 // already being clocked against - its sessions still exist and would still
-// be billable in principle, but nothing here can put a name on their row
-// any more, so ExportPeriod surfaces this count for the Timesheet to
-// mention rather than letting them vanish from an export with no trace.
+// export in principle, but nothing here can put a name on their row any
+// more, so ExportPeriod surfaces this count for the Timesheet to mention
+// rather than letting them vanish from an export with no trace.
 export function countSkippedUnknown(sessions, clients) {
     let known = new Set(clients.map(c => c.name));
     return sessions.filter(session =>

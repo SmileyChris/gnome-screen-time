@@ -15,9 +15,8 @@ export function migratePanelSetting(settings) {
 // The clock state PanelIndicator.setClock takes, derived from a real
 // ClockStore. Running: the current session's own elapsed time - a live
 // timer, so switching from ACME to BETA shows BETA's two minutes, not
-// ACME's half hour plus BETA's two. Not running: today's billed total across
-// every client, the "what there is to bill" summary the running branch is
-// deliberately not.
+// ACME's half hour plus BETA's two. Not running: today's clocked total across
+// every client, the day summary the running branch is deliberately not.
 //
 // `resumable` is whether last-client names a known client, i.e. whether the
 // popup card or the shortcut would start it again. Not running and

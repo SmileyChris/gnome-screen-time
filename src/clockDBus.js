@@ -207,16 +207,14 @@ export class ClockDBus {
                 null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
 
             // Only the sessions that actually produced a row: mergeSessions
-            // also excludes a non-billable or unknown client and a
-            // negative-duration record, and markExported() must not stamp
-            // exportedAt on a session that never appeared in the file.
+            // also excludes an unknown client and a negative-duration
+            // record, and markExported() must not stamp exportedAt on a
+            // session that never appeared in the file.
             let exportable = selectExportable(sessions, clients);
             this._clock.markExported(exportable.map(s => s.id));
-            // Closed sessions skipped specifically because their client
-            // isn't on the list at all (deleted from Preferences, most
-            // likely) - not the non-billable ones selectExportable() also
-            // drops, which are a deliberate exclusion, not something to
-            // flag. The window mentions this when it's non-zero.
+            // Closed sessions skipped because their client isn't on the
+            // list at all (deleted from Preferences, most likely). The
+            // window mentions this when it's non-zero.
             let skippedUnknown = countSkippedUnknown(sessions, clients);
             return JSON.stringify({
                 rows: rows.length, recorded: this._saved(), skippedUnknown,

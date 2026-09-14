@@ -17,10 +17,10 @@ import { HoursBinding, saveFields } from './timesheetDraft.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
-// The Bill row's heading. One helper, since _tickLive() rewrites it while a
-// session runs.
+// The hours override row's heading. One helper, since _tickLive() rewrites
+// it while a session runs.
 function billHeading(hours) {
-    return `Bill · ${hours.toFixed(2)} h on the clock`;
+    return `Hours · ${hours.toFixed(2)} h on the clock`;
 }
 
 // One compact line of the Activities block: name on the left, hours on the
@@ -141,7 +141,7 @@ function describeUpdateError(code) {
     case 'reopen':
         return 'A closed session cannot be reopened from here.';
     case 'exported':
-        return 'That session has been exported; moving it to another day would bill it twice. ' +
+        return 'That session has been exported; moving it to another day would export it twice. ' +
             'Change it in the invoicing app first.';
     case 'invalid':
         return "That value isn't valid.";
@@ -310,10 +310,9 @@ export class TimesheetWindow {
                 // Sessions skipped because their client isn't on the list at
                 // all (most likely deleted from Preferences - see
                 // clients.js's isKnownClient and prefs.js's confirm-delete
-                // dialog), not the non-billable ones selectExportable()
-                // deliberately drops without a word. Appended to whichever
-                // branch below actually reports success, so it never appears
-                // alongside an outright failure that wrote nothing.
+                // dialog). Appended to whichever branch below actually
+                // reports success, so it never appears alongside an outright
+                // failure that wrote nothing.
                 let skippedNote = result2.skippedUnknown > 0
                     ? ` ${result2.skippedUnknown} session(s) skipped for an unknown client.`
                     : '';

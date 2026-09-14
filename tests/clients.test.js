@@ -27,9 +27,9 @@ test('clients: readClients on a populated key returns objects in stored order', 
         ['BETA', false, false],
     ]));
     assertEqual(readClients(settings), [
-        { name: 'ACME', active: true, billable: true },
-        { name: 'BETA', active: false, billable: false },
-    ]);
+        { name: 'ACME', active: true },
+        { name: 'BETA', active: false },
+    ], 'the stored third value (the old billable flag) is ignored');
 });
 
 // --- writeClients ---
@@ -37,26 +37,31 @@ test('clients: readClients on a populated key returns objects in stored order', 
 test('clients: writeClients round-trips through readClients unchanged', () => {
     let settings = new FakeSettings();
     let list = [
-        { name: 'ACME', active: true, billable: true },
-        { name: 'Personal', active: true, billable: false },
+        { name: 'ACME', active: true },
+        { name: 'Personal', active: false },
     ];
     writeClients(settings, list);
     assertEqual(readClients(settings), list);
 });
 
+test('clients: writeClients keeps the stored a(sbb) shape, with true as the unused third value', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: false }]);
+    assertEqual(settings.get_value('clients').deepUnpack(), [['ACME', false, true]]);
+});
+
 // --- activeClients ---
 
-test('clients: activeClients filters out inactive entries regardless of billable', () => {
+test('clients: activeClients filters out inactive entries', () => {
     let settings = new FakeSettings();
     writeClients(settings, [
-        { name: 'ACME', active: true, billable: true },
-        { name: 'BETA', active: false, billable: true },  // inactive but billable: still excluded
-        { name: 'Personal', active: true, billable: false }, // active but not billable: still included
-        { name: 'OldCo', active: false, billable: false },
+        { name: 'ACME', active: true },
+        { name: 'BETA', active: false },
+        { name: 'Personal', active: true },
     ]);
     assertEqual(activeClients(settings), [
-        { name: 'ACME', active: true, billable: true },
-        { name: 'Personal', active: true, billable: false },
+        { name: 'ACME', active: true },
+        { name: 'Personal', active: true },
     ]);
 });
 
@@ -65,8 +70,8 @@ test('clients: activeClients filters out inactive entries regardless of billable
 test('isKnownClient: true for a client on the list, active or not', () => {
     let settings = new FakeSettings();
     writeClients(settings, [
-        { name: 'ACME', active: true, billable: true },
-        { name: 'OldCo', active: false, billable: true },
+        { name: 'ACME', active: true },
+        { name: 'OldCo', active: false },
     ]);
     assertEqual(isKnownClient(settings, 'ACME'), true);
     assertEqual(isKnownClient(settings, 'OldCo'), true, 'inactive is still known - only delete removes it');
@@ -74,13 +79,13 @@ test('isKnownClient: true for a client on the list, active or not', () => {
 
 test('isKnownClient: false for a name not on the list at all', () => {
     let settings = new FakeSettings();
-    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    writeClients(settings, [{ name: 'ACME', active: true }]);
     assertEqual(isKnownClient(settings, 'Ghost'), false);
 });
 
 test('isKnownClient: false for an empty name', () => {
     let settings = new FakeSettings();
-    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    writeClients(settings, [{ name: 'ACME', active: true }]);
     assertEqual(isKnownClient(settings, ''), false);
 });
 
@@ -93,27 +98,27 @@ test('isKnownClient: false against an empty client list', () => {
 
 test('pausedClient: last-client when nothing is running and it is still on the list', () => {
     let settings = new FakeSettings();
-    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    writeClients(settings, [{ name: 'ACME', active: true }]);
     settings.set_string('last-client', 'ACME');
     assertEqual(pausedClient(settings, null), 'ACME');
 });
 
 test('pausedClient: null while a session is running, whoever last-client names', () => {
     let settings = new FakeSettings();
-    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    writeClients(settings, [{ name: 'ACME', active: true }]);
     settings.set_string('last-client', 'ACME');
     assertEqual(pausedClient(settings, { client: 'ACME' }), null);
 });
 
 test('pausedClient: null once stopped, since stop empties last-client', () => {
     let settings = new FakeSettings();
-    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    writeClients(settings, [{ name: 'ACME', active: true }]);
     assertEqual(pausedClient(settings, null), null);
 });
 
 test('pausedClient: null when last-client was deleted from the list', () => {
     let settings = new FakeSettings();
-    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    writeClients(settings, [{ name: 'ACME', active: true }]);
     settings.set_string('last-client', 'Ghost');
     assertEqual(pausedClient(settings, null), null);
 });
@@ -157,11 +162,11 @@ test('clients: recentClients pads from the active list to reach min, skipping du
     clock.stop(t + 7200000);
 
     writeClients(settings, [
-        { name: 'ACME', active: true, billable: true },   // already present today: not duplicated
-        { name: 'BETA', active: true, billable: true },   // already present today: not duplicated
-        { name: 'GAMMA', active: true, billable: true },  // padding candidate
-        { name: 'DELTA', active: false, billable: true }, // inactive: never used as padding
-        { name: 'ZETA', active: true, billable: false },  // padding candidate, non-billable is irrelevant here
+        { name: 'ACME', active: true },   // already present today: not duplicated
+        { name: 'BETA', active: true },   // already present today: not duplicated
+        { name: 'GAMMA', active: true },  // padding candidate
+        { name: 'DELTA', active: false }, // inactive: never used as padding
+        { name: 'ZETA', active: true },                   // padding candidate
     ]);
 
     let names = recentClients(settings, clock, '2026-09-11', 4);
@@ -177,8 +182,8 @@ test('clients: recentClients yields a shorter list than min when the active list
     clock.stop(t + 3600000);
 
     writeClients(settings, [
-        { name: 'ACME', active: true, billable: true },
-        { name: 'DELTA', active: false, billable: true }, // inactive: never used as padding
+        { name: 'ACME', active: true },
+        { name: 'DELTA', active: false }, // inactive: never used as padding
     ]);
 
     let names = recentClients(settings, clock, '2026-09-11', 10);
@@ -191,8 +196,8 @@ test('clients: recentClients never uses an inactive client as padding, even with
     let clock = freshClock(settings);
 
     writeClients(settings, [
-        { name: 'DELTA', active: false, billable: true },
-        { name: 'ACME', active: true, billable: true },
+        { name: 'DELTA', active: false },
+        { name: 'ACME', active: true },
     ]);
 
     let names = recentClients(settings, clock, '2026-09-11', 5);
@@ -214,7 +219,7 @@ test('clients: recentClients lists a client clocked today that has since been de
 
     // GHOST never appears in the client list at all - as if removed.
     writeClients(settings, [
-        { name: 'ACME', active: true, billable: true },
+        { name: 'ACME', active: true },
     ]);
 
     let names = recentClients(settings, clock, '2026-09-11', 2);
@@ -230,8 +235,8 @@ test('clients: recentClients lists a client clocked today that has since been ma
     clock.stop(t + 3600000);
 
     writeClients(settings, [
-        { name: 'GHOST', active: false, billable: true }, // deactivated after being clocked today
-        { name: 'ACME', active: true, billable: true },
+        { name: 'GHOST', active: false }, // deactivated after being clocked today
+        { name: 'ACME', active: true },
     ]);
 
     let names = recentClients(settings, clock, '2026-09-11', 2);

@@ -2,14 +2,18 @@ import GLib from 'gi://GLib';
 
 // The client list lives in GSettings rather than in clock.json, so the
 // preferences process can edit it without writing a file the Shell owns.
+// Stored as a(sbb): name, active, and a third value that is no longer used
+// (it was a billable flag). GSettings cannot change a key's type without
+// losing what is stored, so the shape stays: the third value is written as
+// true and ignored on read.
 export function readClients(settings) {
     return settings.get_value('clients').deepUnpack()
-        .map(([name, active, billable]) => ({ name, active, billable }));
+        .map(([name, active]) => ({ name, active }));
 }
 
 export function writeClients(settings, list) {
     settings.set_value('clients', new GLib.Variant('a(sbb)',
-        list.map(c => [c.name, c.active, c.billable])));
+        list.map(c => [c.name, c.active, true])));
 }
 
 export function activeClients(settings) {
@@ -17,7 +21,7 @@ export function activeClients(settings) {
 }
 
 // Whether `name` still names an entry in the client list at all - active or
-// not, billable or not. A client can be deleted from Preferences while
+// not. A client can be deleted from Preferences while
 // last-client (the setting the panel's Start button and the toggle-clock
 // shortcut both start blindly) still remembers its name; starting a clock
 // for a name no longer in the list at all would create billing history for

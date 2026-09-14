@@ -61,7 +61,7 @@
     <key name="clients" type="a(sbb)">
       <default>[]</default>
       <summary>Clients available to the clock</summary>
-      <description>One entry per client: name, whether it is offered in the popup, and whether its time is billable. Non-billable clients are tracked and shown but left out of exports.</description>
+      <description>One entry per client: name, whether it is offered in the popup, and a third value that is no longer used (it was a billable flag, kept so stored lists still load). Every client on the list is exported.</description>
     </key>
     <key name="last-client" type="s">
       <default>""</default>
@@ -81,7 +81,7 @@
       </choices>
       <default>"screen"</default>
       <summary>What the panel shows next to the icon</summary>
-      <description>"screen" shows today's total screen time, "client" shows the running clock (or today's billed total when the clock is stopped), "none" shows only the icon. A dot marks a running clock in every mode.</description>
+      <description>"screen" shows today's total screen time, "client" shows the running clock (or today's clocked total when the clock is stopped), "none" shows only the icon. A dot marks a running clock in every mode.</description>
     </key>
     <key name="panel-time-migrated" type="b">
       <default>false</default>
