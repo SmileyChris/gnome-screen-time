@@ -29,6 +29,7 @@ const FILES = [
     './accelerators.test.js',
     './timesheetDraft.test.js',
     './timesheetSummary.test.js',
+    './timesheetArgs.test.js',
     './activitySources.test.js',
     './browserSource.test.js',
     './rules.test.js',

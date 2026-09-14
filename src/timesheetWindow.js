@@ -184,6 +184,9 @@ export class TimesheetWindow {
         this.window.content = this._toasts;
 
         this._groups = [];
+        // The day showDay() asked to scroll to, held until the list has
+        // been drawn (see _scrollToPendingDaySoon()).
+        this._pendingDay = null;
         this._refreshing = false;
         this._refreshPending = false;
         // refresh() tears down and rebuilds every row from the server's
@@ -429,7 +432,54 @@ export class TimesheetWindow {
                 this._refreshPending = false;
                 this.refresh();
             }
+            // A refresh that lands before the scroll rebuilt the groups;
+            // aim at the new ones.
+            this._scrollToPendingDaySoon();
         }
+    }
+
+    // Scrolls so `dayKey`'s heading sits at the top of the list, for the
+    // popup's "Clocked" card (see timesheet.js). A day outside the list
+    // (before the start of last month) leaves it where it is, and null does
+    // nothing.
+    showDay(dayKey) {
+        this._pendingDay = dayKey;
+        this._scrollToPendingDaySoon();
+    }
+
+    // Waits for a drawn, laid-out window, so the group's position is known.
+    // The window may not be shown yet when showDay() is first called.
+    _scrollToPendingDaySoon() {
+        if (!this._pendingDay)
+            return;
+        let afterPaint = () => {
+            let frameClock = this.window.get_frame_clock();
+            let paintId = frameClock.connect('after-paint', () => {
+                frameClock.disconnect(paintId);
+                this._scrollToPendingDay();
+            });
+            this.window.queue_draw();
+        };
+        if (this.window.get_mapped()) {
+            afterPaint();
+        } else {
+            let mapId = this.window.connect('map', () => {
+                this.window.disconnect(mapId);
+                afterPaint();
+            });
+        }
+    }
+
+    _scrollToPendingDay() {
+        let dayKey = this._pendingDay;
+        if (!dayKey)
+            return;
+        this._pendingDay = null;
+        let group = this._groups.find(g => g.title === dayKey);
+        let scroller = group?.get_ancestor(Gtk.ScrolledWindow);
+        let [ok, rect] = scroller ? group.compute_bounds(scroller) : [false, null];
+        if (ok)
+            scroller.vadjustment.value += rect.get_y();
     }
 
     // cleanStop is set only by ClockStore.closeForShutdown(), which now

@@ -292,7 +292,8 @@ export class PopupWidget {
         // the day's clocked total, no buttons. Stop forgets last-client, so
         // nothing can resume it and the panel stops showing a total (see
         // panelMode.js). Tapping the card itself pauses or resumes, like
-        // the pause and play buttons; on a total, it opens the Timesheet.
+        // the pause and play buttons; on a total above zero, it opens the
+        // Timesheet at that day.
         let isToday = this._date === todayKeyFor(this._settings);
         let running = isToday ? (this._clock?.running ?? null) : null;
         // See clients.js's pausedClient for exactly when that is.
@@ -300,16 +301,16 @@ export class PopupWidget {
         let paused = resumable !== null;
         let client = running?.client ?? resumable;
         let canToggle = client !== null;
-        // Nothing to pause or resume, so the card is just the day's total:
-        // tapping it opens the Timesheet, where that total is broken down,
-        // like the footer's Timesheet button.
-        let opensTimesheet = !canToggle && !!this._clock;
-        let tappable = canToggle || opensTimesheet;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.
         let figure = !this._clock ? 0
             : client !== null ? this._clock.billedSecondsByClient(this._date).get(client) ?? 0
             : this._clock.billedSecondsForDay(this._date);
+        // Nothing to pause or resume, so the card is just the day's total:
+        // tapping it opens the Timesheet at that day, where the total is
+        // broken down. A zero total has nothing to show, so it stays inert.
+        let opensTimesheet = !canToggle && figure > 0;
+        let tappable = canToggle || opensTimesheet;
         let clockTier = running ? CLOCK_RUNNING : CLOCK_STOPPED;
         let clock = new St.BoxLayout({
             vertical: true,
@@ -416,7 +417,7 @@ export class PopupWidget {
             clock.connect('button-release-event', () => {
                 if (opensTimesheet) {
                     this._menu.close();
-                    this._onOpenTimesheet?.();
+                    this._onOpenTimesheet?.(this._date);
                 } else if (!buttons.some(btn => btn.hover)) {
                     // A release over a button is that button's click, not a
                     // tap on the card around it.
