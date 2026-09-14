@@ -132,7 +132,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
 
         const panelRow = new Adw.ComboRow({
             title: 'Show in panel',
-            subtitle: 'A dot always marks a running clock, whichever you pick.',
+            subtitle: 'The icon turns into a stopwatch while the clock runs, whichever you pick.',
             model: Gtk.StringList.new(['Nothing', 'Client time', 'Screen time']),
         });
         const PANEL_MODES = ['none', 'client', 'screen'];
