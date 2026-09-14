@@ -1948,3 +1948,116 @@ test('ClockStore: loading drops closed, untouched, unexported sessions under a m
         'billed,noted,exported,long,open');
     clock.destroy();
 });
+
+// --- continuing a session restarted within a minute ---
+
+test('ClockStore: restarting the same client within a minute continues its session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let again = clock.start('ACME', t + 3600000 + 45000);
+    assertEqual(again.id, first.id, 'the same session, not a new one');
+    assertEqual(again.endMs, null, 'running again');
+    assertEqual(clock.sessionsForDay('2026-09-11').length, 1);
+    clock.stop(t + 7200000);
+    assertEqual(clock.sessionById(first.id).endMs - first.startMs, 7200000,
+        'the gap between stop and restart counts as work');
+    clock.destroy();
+});
+
+test('ClockStore: restarting a minute or more later starts a new session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let again = clock.start('ACME', t + 3600000 + 60000);
+    assert(again.id !== first.id, 'a new session');
+    assertEqual(clock.sessionById(first.id).endMs, t + 3600000, 'the old one stays closed');
+    clock.destroy();
+});
+
+test('ClockStore: starting a different client within a minute starts a new session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let acme = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let beta = clock.start('BETA', t + 3600000 + 10000);
+    assert(beta.id !== acme.id, 'a new session for BETA');
+    assertEqual(clock.sessionById(acme.id).endMs, t + 3600000, 'ACME stays closed');
+    clock.destroy();
+});
+
+test('ClockStore: switching away for under a minute and back continues the first session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let acme = clock.start('ACME', t);
+    clock.start('BETA', t + 3600000);            // closes ACME
+    let back = clock.start('ACME', t + 3600000 + 20000);   // BETA's 20s is dropped as noise
+    assertEqual(back.id, acme.id, 'ACME continues');
+    assertEqual(clock.sessionsForDay('2026-09-11').map(s => s.client), ['ACME']);
+    clock.destroy();
+});
+
+test('ClockStore: a session with another session after it is not continued', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let acme = clock.start('ACME', t);
+    let beta = clock.start('BETA', t + 3600000);
+    clock.update(beta.id, { description: 'quick call' });   // a note keeps it past the noise rule
+    let back = clock.start('ACME', t + 3600000 + 20000);
+    assert(back.id !== acme.id, 'a new ACME session, since BETA came after the first');
+    clock.destroy();
+});
+
+test('ClockStore: a restart on the next day starts a new session', () => {
+    let clock = freshClock();
+    let first = clock.start('ACME', at(2026, 9, 11, 23, 0));
+    clock.stop(at(2026, 9, 11, 23, 59) + 30000);
+    let again = clock.start('ACME', at(2026, 9, 12, 0, 0) + 10000);
+    assert(again.id !== first.id, 'days stay separate');
+    assertEqual(again.dayKey, '2026-09-12');
+    clock.destroy();
+});
+
+test('ClockStore: an exported session is not continued', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.markExported([first.id], t + 3600000 + 5000);
+    let again = clock.start('ACME', t + 3600000 + 30000);
+    assert(again.id !== first.id, 'its exported hours must not change');
+    clock.destroy();
+});
+
+test('ClockStore: a session with an hours override is not continued', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    clock.update(first.id, { billedHours: 1 });
+    let again = clock.start('ACME', t + 3600000 + 30000);
+    assert(again.id !== first.id, 'the override would hide the new running time');
+    clock.destroy();
+});
+
+test('ClockStore: a session closed at shutdown is not continued', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    clock.closeForShutdown(t + 3600000);
+    let again = clock.start('ACME', t + 3600000 + 10000);
+    assert(again.id !== first.id, 'only a normal stop is continued');
+    clock.destroy();
+});
+
+test('ClockStore: start with resume: false always starts a new session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9, 0);
+    let first = clock.start('ACME', t);
+    clock.stop(t + 3600000);
+    let again = clock.start('ACME', t + 3600000 + 10000, { resume: false });
+    assert(again.id !== first.id, 'the trim flows cut a gap out on purpose');
+    clock.destroy();
+});

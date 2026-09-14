@@ -247,7 +247,8 @@ export class ClockNotifier {
                         return;
                     }
                     try {
-                        this._clock.start(client, wokeAtMs);
+                        // Never continued: leaving the sleep out is the point.
+                        this._clock.start(client, wokeAtMs, { resume: false });
                     } catch (e) {
                         console.error('[ScreenTime] resume nudge: sleep was trimmed but ' +
                             `the clock could not be restarted for ${client}: ${e.message}`);
@@ -317,7 +318,8 @@ export class ClockNotifier {
                         return;
                     }
                     try {
-                        this._clock.start(client, nowMs);
+                        // Never continued: leaving the away time out is the point.
+                        this._clock.start(client, nowMs, { resume: false });
                     } catch (e) {
                         console.error('[ScreenTime] away nudge: away time was trimmed but ' +
                             `the clock could not be restarted for ${client}: ${e.message}`);

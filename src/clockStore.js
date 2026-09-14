@@ -18,6 +18,12 @@ export const RESUME_GAP_MS = 120000;
 // away, not work. It is dropped rather than kept as billing noise.
 export const MIN_SESSION_MS = 60000;
 
+// A stop and a restart of the same client this close together read as one
+// stretch of work, not two: pause then play, the shortcut twice, or a quick
+// switch away and back. start() continues the stopped session instead (see
+// _resumable()).
+export const RESUME_WITHIN_MS = 60000;
+
 function isNoise(session) {
     return session.endMs !== null &&
         session.endMs - session.startMs < MIN_SESSION_MS &&
@@ -445,7 +451,10 @@ export class ClockStore {
         return this._saveFailing;
     }
 
-    start(client, nowMs = Date.now()) {
+    // `resume: false` always opens a new session. The Trim sleep and Trim
+    // away time actions pass it, because they close a session and restart
+    // the same client precisely to leave the gap out.
+    start(client, nowMs = Date.now(), { resume = true } = {}) {
         // Same rule update() applies to `client`: reached over D-Bus as
         // StartSession(client), so this can be anything JSON can carry,
         // including "" or whitespace. Checked first, before anything else,
@@ -484,9 +493,42 @@ export class ClockStore {
 
         if (current)
             this._close(current, nowMs);
+        // After closing `current`, so a switch away that lasted under a
+        // minute has already been dropped as noise and is not in the way.
+        let previous = resume ? this._resumable(client, session.dayKey, nowMs) : null;
+        if (previous) {
+            previous.endMs = null;
+            previous.lastSeenMs = nowMs;
+            this._changed();
+            return previous;
+        }
         this._sessions.push(session);
         this._changed();
         return session;
+    }
+
+    // The session start() continues instead of opening a new one, or null.
+    // It must be `client`'s own, closed by a normal stop less than
+    // RESUME_WITHIN_MS before `nowMs`, on the same day, and the newest
+    // session in the store, so reopening it can never overlap another. It is
+    // never one that has been exported (its exported hours must not change),
+    // carries an hours override (that would hide the new running time), or
+    // was closed by a crash or shutdown rather than a stop.
+    _resumable(client, dayKey, nowMs) {
+        let latest = null;
+        for (let s of this._sessions) {
+            if (!latest || s.startMs > latest.startMs)
+                latest = s;
+        }
+        if (!latest || latest.client !== client || latest.endMs === null)
+            return null;
+        let gap = nowMs - latest.endMs;
+        if (gap < 0 || gap >= RESUME_WITHIN_MS)
+            return null;
+        if (latest.dayKey !== dayKey || latest.exportedAt !== null ||
+            latest.billedHours !== null || latest.interrupted || latest.cleanStop)
+            return null;
+        return latest;
     }
 
     stop(nowMs = Date.now()) {
