@@ -28,6 +28,7 @@ const FILES = [
     './nudge.test.js',
     './accelerators.test.js',
     './timesheetDraft.test.js',
+    './timesheetSummary.test.js',
     './activitySources.test.js',
     './browserSource.test.js',
     './rules.test.js',

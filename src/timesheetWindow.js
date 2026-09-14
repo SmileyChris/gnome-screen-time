@@ -14,6 +14,7 @@ import { INTERFACE_XML } from './clockDBus.js';
 // GTK-dependent window.
 import { parseClock } from './clockTime.js';
 import { HoursBinding, saveFields } from './timesheetDraft.js';
+import { dayHeading } from './timesheetSummary.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
@@ -66,19 +67,6 @@ function hoursOf(session) {
 
 function actualHoursOf(session) {
     return ((session.endMs ?? Date.now()) - session.startMs) / 3600000;
-}
-
-// A session's contribution in whole milliseconds - mirrors timeExport.js's
-// sessionMs(), for the same reason: summing hoursOf() as a float per
-// session and adding those floats together can round to a different total
-// than summing whole milliseconds and rounding once, since hours cannot
-// exactly represent most decimal fractions. Used only for the per-day total
-// below, so this window's own figure never quietly disagrees with what
-// actually gets exported for the same day.
-function sessionMs(session) {
-    if (hasBilledHours(session))
-        return Math.round(session.billedHours * 3600000);
-    return (session.endMs ?? Date.now()) - session.startMs;
 }
 
 function clockOf(ms) {
@@ -423,15 +411,12 @@ export class TimesheetWindow {
             }
 
             for (let [dayKey, daySessions] of [...byDay].reverse()) {
-                // Whole milliseconds summed, then rounded once - see
-                // sessionMs() above - so this total never quietly disagrees
-                // with mergeSessions()'s own row for the same day by the
-                // ~0.01h a per-session float sum can drift by.
-                let totalMs = daySessions.reduce((sum, s) => sum + sessionMs(s), 0);
-                let billed = Math.round(totalMs / 36000) / 100;
+                // Each client's hours, then the total when more than one
+                // client worked. timesheetSummary.js rounds them the same
+                // way the export rounds its rows.
                 let group = new Adw.PreferencesGroup({
                     title: dayKey,
-                    description: `${billed.toFixed(2)} h`,
+                    description: dayHeading(daySessions),
                 });
                 for (let session of daySessions)
                     group.add(this._sessionRow(session));
