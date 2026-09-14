@@ -7,8 +7,13 @@ import { formatTime } from './formatTime.js';
 export function migratePanelSetting(settings) {
     if (settings.get_boolean('panel-time-migrated'))
         return;
-    settings.set_string('panel-time',
-        settings.get_boolean('show-total-in-panel') ? 'screen' : 'none');
+    // Only a show-total-in-panel someone actually set says anything. One
+    // still at its default (a fresh install, say) leaves panel-time at its
+    // own default rather than pinning it to "screen".
+    if (settings.get_user_value('show-total-in-panel') !== null) {
+        settings.set_string('panel-time',
+            settings.get_boolean('show-total-in-panel') ? 'screen' : 'none');
+    }
     settings.set_boolean('panel-time-migrated', true);
 }
 
@@ -46,6 +51,7 @@ export function panelClockState(clock, dayKey, nowMs = Date.now(), away = false,
 // clock = { running, away, paused, client, seconds } as PanelIndicator.setClock
 // takes it. A stopped clock shows nothing: stopping means done for now.
 export function panelLabelText(mode, totalSeconds, clock) {
+    mode = effectiveMode(mode, clock);
     if (mode === 'screen' && totalSeconds > 0)
         return formatTime(totalSeconds);
     if (mode === 'client' && clock.running)
@@ -58,5 +64,15 @@ export function panelLabelText(mode, totalSeconds, clock) {
 // Whether the panel label is faded: only a paused clock's total, so it
 // reads as not counting while still there to resume.
 export function panelLabelDimmed(mode, clock) {
-    return mode === 'client' && clock.paused;
+    return effectiveMode(mode, clock) === 'client' && clock.paused;
+}
+
+// "client-or-screen" (the default) is "client" while the clock runs or is
+// paused with time to show, and "screen" otherwise: before the first
+// session of the day, once stopped, and paused on a client with no time
+// today. Every other mode is itself.
+function effectiveMode(mode, clock) {
+    if (mode !== 'client-or-screen')
+        return mode;
+    return clock.running || (clock.paused && clock.seconds > 0) ? 'client' : 'screen';
 }

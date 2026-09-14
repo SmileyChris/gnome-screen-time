@@ -60,6 +60,14 @@ test('panelMode: already-migrated is a no-op, even if show-total-in-panel would 
     assertEqual(settings.get_boolean('panel-time-migrated'), true);
 });
 
+test('panelMode: an old show-total-in-panel that was never set leaves panel-time at its default', () => {
+    let settings = new FakeSettings();   // show-total-in-panel reads its default, true
+    migratePanelSetting(settings);
+    assertEqual(settings.get_string('panel-time'), 'client-or-screen',
+        'a fresh install must keep the new default, not be migrated to "screen"');
+    assertEqual(settings.get_boolean('panel-time-migrated'), true);
+});
+
 // --- panelLabelText ---
 
 const stopped = (seconds = 0) => ({ running: false, away: false, paused: false, client: '', seconds });
@@ -111,6 +119,36 @@ test('panelLabelText: "none" mode hides even while running with time on the cloc
 
 test('panelLabelText: "none" mode hides when stopped at zero', () => {
     assertEqual(panelLabelText('none', 0, stopped(0)), '');
+});
+
+// --- "client-or-screen" mode ---
+
+test('panelLabelText: "client-or-screen" running shows the client and elapsed time', () => {
+    assertEqual(panelLabelText('client-or-screen', 3600, running('ACME', 720)), 'ACME 12m');
+});
+
+test('panelLabelText: "client-or-screen" paused shows the paused client and its time today', () => {
+    assertEqual(panelLabelText('client-or-screen', 3600, paused(720, 'ACME')), 'ACME 12m');
+});
+
+test('panelLabelText: "client-or-screen" stopped or not started shows the screen total', () => {
+    assertEqual(panelLabelText('client-or-screen', 720, stopped(60)), '12m');
+    assertEqual(panelLabelText('client-or-screen', 720, stopped(0)), '12m');
+});
+
+test('panelLabelText: "client-or-screen" paused at zero falls back to the screen total', () => {
+    assertEqual(panelLabelText('client-or-screen', 720, paused(0)), '12m');
+});
+
+test('panelLabelText: "client-or-screen" with no screen time and no clock hides', () => {
+    assertEqual(panelLabelText('client-or-screen', 0, stopped(0)), '');
+});
+
+test('panelLabelDimmed: "client-or-screen" fades only while showing a paused client', () => {
+    assertEqual(panelLabelDimmed('client-or-screen', paused(720)), true);
+    assertEqual(panelLabelDimmed('client-or-screen', paused(0)), false, 'showing screen time');
+    assertEqual(panelLabelDimmed('client-or-screen', stopped(720)), false);
+    assertEqual(panelLabelDimmed('client-or-screen', running('ACME', 720)), false);
 });
 
 // --- panelClockState (against a real ClockStore) ---

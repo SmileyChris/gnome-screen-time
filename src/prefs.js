@@ -17,6 +17,20 @@ const CHART_HEIGHT = 110;
 // as one product.
 const BAR_RGB = [0x35 / 255, 0x84 / 255, 0xe4 / 255];
 
+// An Adw.ComboRow's default factory ellipsizes the selected item to fit
+// beside the row's title and subtitle. This one never ellipsizes, so the row
+// gives the choice its full width and wraps the subtitle instead.
+function unellipsizedFactory() {
+    const factory = new Gtk.SignalListItemFactory();
+    factory.connect('setup', (_factory, item) => {
+        item.child = new Gtk.Label({xalign: 0});
+    });
+    factory.connect('bind', (_factory, item) => {
+        item.child.label = item.item.string;
+    });
+    return factory;
+}
+
 // Sync read is fine here: prefs runs in its own process, not the compositor.
 function loadUsageData() {
     let file = Gio.File.new_for_path(STORE_FILE);
@@ -133,9 +147,10 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         const panelRow = new Adw.ComboRow({
             title: 'Show in panel',
             subtitle: 'The icon turns into a stopwatch while the clock runs, whichever you pick.',
-            model: Gtk.StringList.new(['Nothing', 'Client time', 'Screen time']),
+            model: Gtk.StringList.new(['Client or screen time', 'Client time', 'Screen time', 'Nothing']),
+            factory: unellipsizedFactory(),
         });
-        const PANEL_MODES = ['none', 'client', 'screen'];
+        const PANEL_MODES = ['client-or-screen', 'client', 'screen', 'none'];
         panelRow.selected = Math.max(0, PANEL_MODES.indexOf(settings.get_string('panel-time')));
         panelRow.connect('notify::selected', () => {
             settings.set_string('panel-time', PANEL_MODES[panelRow.selected]);

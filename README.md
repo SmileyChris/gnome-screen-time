@@ -60,7 +60,7 @@ gnome-extensions prefs screen-time@gnome-screen-time
 
 | Setting | Default | What it does |
 |---|---|---|
-| Show in panel | Screen time | *Screen time* shows today's total; *Client time* shows the running session's own elapsed time, or, faded, the paused client's time today; *Nothing* shows only the icon. The icon turns into a stopwatch while the clock runs, in every mode. |
+| Show in panel | Client or screen time | *Client or screen time* shows the clock while it runs or is paused, and today's screen time otherwise; *Screen time* shows today's total; *Client time* shows the running session's own elapsed time, or, faded, the paused client's time today; *Nothing* shows only the icon. The icon turns into a stopwatch while the clock runs, in every mode. |
 | Max interval | 600s | Caps any single tracked stretch, so a stall can't dump hours onto one app. |
 | Idle timeout | 10 min | Stop counting after this long without input. `0` disables idle detection. |
 | Day starts at | 0 (midnight) | Hour a new day begins, so work past midnight can stay on the day it started. |
