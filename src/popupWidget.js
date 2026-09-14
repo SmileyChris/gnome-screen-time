@@ -292,17 +292,19 @@ export class PopupWidget {
         // the day's clocked total, no buttons. Stop forgets last-client, so
         // nothing can resume it and the panel stops showing a total (see
         // panelMode.js). Tapping the card itself pauses or resumes, like
-        // the pause and play buttons.
+        // the pause and play buttons; on a total, it opens the Timesheet.
         let isToday = this._date === todayKeyFor(this._settings);
         let running = isToday ? (this._clock?.running ?? null) : null;
-        // See clients.js's pausedClient for exactly when that is. With
-        // nothing running and nothing to resume, the card is not reactive
-        // and has no hover highlight, rather than a live control that does
-        // nothing when pressed.
+        // See clients.js's pausedClient for exactly when that is.
         let resumable = isToday && this._clock ? pausedClient(this._settings, running) : null;
         let paused = resumable !== null;
         let client = running?.client ?? resumable;
         let canToggle = client !== null;
+        // Nothing to pause or resume, so the card is just the day's total:
+        // tapping it opens the Timesheet, where that total is broken down,
+        // like the footer's Timesheet button.
+        let opensTimesheet = !canToggle && !!this._clock;
+        let tappable = canToggle || opensTimesheet;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.
         let figure = !this._clock ? 0
@@ -312,8 +314,8 @@ export class PopupWidget {
         let clock = new St.BoxLayout({
             vertical: true,
             x_expand: true,
-            reactive: canToggle,
-            track_hover: canToggle,
+            reactive: tappable,
+            track_hover: tappable,
             style_class: 'screen-time-card',
             style: cardStyle(clockTier, false),
         });
@@ -398,16 +400,20 @@ export class PopupWidget {
             style: FIGURE_STYLE,
         }));
 
-        if (canToggle) {
+        if (tappable) {
             // Same inline-gradient hover swap as the screen time card.
             clock.connect('notify::hover', () => {
                 clock.style = cardStyle(clockTier, clock.hover);
             });
             clock.connect('button-release-event', () => {
-                // A release over a button is that button's click, not a tap
-                // on the card around it.
-                if (!buttons.some(btn => btn.hover))
+                if (opensTimesheet) {
+                    this._menu.close();
+                    this._onOpenTimesheet?.();
+                } else if (!buttons.some(btn => btn.hover)) {
+                    // A release over a button is that button's click, not a
+                    // tap on the card around it.
                     toggle();
+                }
                 return Clutter.EVENT_STOP;
             });
         }
