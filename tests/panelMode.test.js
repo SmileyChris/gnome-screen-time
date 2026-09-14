@@ -63,7 +63,7 @@ test('panelMode: already-migrated is a no-op, even if show-total-in-panel would 
 // --- panelLabelText ---
 
 const stopped = (seconds = 0) => ({ running: false, away: false, paused: false, client: '', seconds });
-const paused = (seconds = 0) => ({ running: false, away: false, paused: true, client: '', seconds });
+const paused = (seconds = 0, client = 'ACME') => ({ running: false, away: false, paused: true, client, seconds });
 const running = (client, seconds) => ({ running: true, away: false, paused: false, client, seconds });
 
 test('panelLabelText: "screen" mode shows the formatted total when there is time today', () => {
@@ -78,8 +78,8 @@ test('panelLabelText: "client" mode running shows the client and elapsed time', 
     assertEqual(panelLabelText('client', 0, running('ACME', 720)), 'ACME 12m');
 });
 
-test('panelLabelText: "client" mode paused with billed time today shows the total', () => {
-    assertEqual(panelLabelText('client', 0, paused(720)), '12m');
+test('panelLabelText: "client" mode paused shows the paused client and its time today', () => {
+    assertEqual(panelLabelText('client', 0, paused(720, 'ACME')), 'ACME 12m');
 });
 
 test('panelLabelText: "client" mode paused at zero hides', () => {
@@ -160,8 +160,23 @@ test('panelClockState: stopped with a client to resume is paused; without one it
     clock.stop(t + 1800000);
 
     let nowMs = t + 3600000;
-    assertEqual(panelClockState(clock, '2026-09-11', nowMs, false, true).paused, true);
-    assertEqual(panelClockState(clock, '2026-09-11', nowMs, false, false).paused, false);
+    assertEqual(panelClockState(clock, '2026-09-11', nowMs, false, 'ACME').paused, true);
+    assertEqual(panelClockState(clock, '2026-09-11', nowMs, false, null).paused, false);
+    clock.destroy();
+});
+
+test('panelClockState: a paused clock reports the paused client and only its time today', () => {
+    let settings = new FakeSettings();
+    let clock = freshClock(settings);
+    let t = at(2026, 9, 11, 9, 0);
+    clock.start('ACME', t);
+    clock.start('BETA', t + 1800000);      // closes ACME after 30 minutes
+    clock.start('ACME', t + 1800000 + 120000);   // BETA got 2 minutes
+    clock.stop(t + 1800000 + 120000 + 600000);   // ACME's second stretch: 10 minutes
+
+    let state = panelClockState(clock, '2026-09-11', t + 7200000, false, 'ACME');
+    assertEqual(state, { running: false, away: false, paused: true, client: 'ACME', seconds: 2400 },
+        'ACME\'s 30 + 10 minutes, without BETA\'s 2');
     clock.destroy();
 });
 
@@ -170,7 +185,7 @@ test('panelClockState: a running clock is never paused, even with a client to re
     let clock = freshClock(settings);
     let t = at(2026, 9, 11, 9, 0);
     clock.start('ACME', t);
-    assertEqual(panelClockState(clock, '2026-09-11', t + 60000, false, true).paused, false);
+    assertEqual(panelClockState(clock, '2026-09-11', t + 60000, false, 'ACME').paused, false);
     clock.destroy();
 });
 

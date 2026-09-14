@@ -10,7 +10,7 @@ import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
-import { isKnownClient } from './clients.js';
+import { isKnownClient, pausedClient } from './clients.js';
 import { migratePanelSetting, panelClockState } from './panelMode.js';
 import { nudgeDue, awayMomentMs, awayNudgeDue } from './nudge.js';
 import { IntervalLog } from './intervalLog.js';
@@ -377,7 +377,7 @@ export default class ScreenTimeExtension extends Extension {
         this._indicator.setClock(panelClockState(
             this._clock, todayKeyFor(this._settings), Date.now(),
             this._tracker?.away ?? false,
-            isKnownClient(this._settings, this._settings.get_string('last-client'))));
+            pausedClient(this._settings, this._clock.running)));
     }
 
     // Must be safe to call at any point enable() might have thrown (see the

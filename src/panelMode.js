@@ -15,23 +15,30 @@ export function migratePanelSetting(settings) {
 // The clock state PanelIndicator.setClock takes, derived from a real
 // ClockStore. Running: the current session's own elapsed time - a live
 // timer, so switching from ACME to BETA shows BETA's two minutes, not
-// ACME's half hour plus BETA's two. Not running: today's clocked total across
-// every client, the day summary the running branch is deliberately not.
+// ACME's half hour plus BETA's two. Paused: the paused client's own time
+// today, the same figure the popup's paused clock card shows. Stopped:
+// today's clocked total across every client.
 //
-// `resumable` is whether last-client names a known client, i.e. whether the
-// popup card or the shortcut would start it again. Not running and
-// resumable is paused; not running and not resumable is stopped, which is
-// what the card's stop button leaves behind by clearing last-client.
-export function panelClockState(clock, dayKey, nowMs = Date.now(), away = false, resumable = false) {
+// `pausedName` is the client a paused clock would resume (clients.js's
+// pausedClient), or null. Not running with a name is paused; not running
+// without one is stopped, which is what the card's stop button leaves
+// behind by clearing last-client.
+export function panelClockState(clock, dayKey, nowMs = Date.now(), away = false, pausedName = null) {
     let running = clock.running;
+    let paused = running === null && pausedName !== null;
+    let seconds;
+    if (running !== null)
+        seconds = (nowMs - running.startMs) / 1000;
+    else if (paused)
+        seconds = clock.billedSecondsByClient(dayKey, nowMs).get(pausedName) ?? 0;
+    else
+        seconds = clock.billedSecondsForDay(dayKey, nowMs);
     return {
         running: running !== null,
         away,
-        paused: running === null && resumable,
-        client: running?.client ?? '',
-        seconds: running !== null
-            ? (nowMs - running.startMs) / 1000
-            : clock.billedSecondsForDay(dayKey, nowMs),
+        paused,
+        client: running?.client ?? (paused ? pausedName : ''),
+        seconds,
     };
 }
 
@@ -44,7 +51,7 @@ export function panelLabelText(mode, totalSeconds, clock) {
     if (mode === 'client' && clock.running)
         return `${clock.client} ${formatTime(clock.seconds)}`;
     if (mode === 'client' && clock.paused && clock.seconds > 0)
-        return formatTime(clock.seconds);
+        return `${clock.client} ${formatTime(clock.seconds)}`;
     return '';
 }
 
