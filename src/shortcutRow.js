@@ -4,6 +4,12 @@ import GObject from 'gi://GObject';
 import Gtk from 'gi://Gtk?version=4.0';
 import { isValidBinding } from './accelerators.js';
 
+// Gtk.ShortcutLabel is deprecated since GTK 4.18 in favour of
+// Adw.ShortcutLabel, which only exists from libadwaita 1.8 (GNOME 49).
+// Both take the same accelerator and disabled-text properties, so GNOME 47
+// and 48 fall back to the GTK one.
+const ShortcutLabel = Adw.ShortcutLabel ?? Gtk.ShortcutLabel;
+
 export const ShortcutRow = GObject.registerClass(
 class ShortcutRow extends Adw.ActionRow {
     constructor(settings, key, title, subtitle) {
@@ -12,7 +18,7 @@ class ShortcutRow extends Adw.ActionRow {
         this._key = key;
         this._editor = null;
 
-        this._label = new Gtk.ShortcutLabel({
+        this._label = new ShortcutLabel({
             disabled_text: 'Disabled',
             valign: Gtk.Align.CENTER,
         });
