@@ -404,10 +404,32 @@ export class PopupWidget {
             ` max-width: ${Math.round(ROW_W / 2) - 36 - 20 * buttons.length}px;`;
         clock.add_child(titleRow);
 
-        clock.add_child(new St.Label({
+        // The figure is the client's time today, while the panel shows the
+        // running session's own time. Once the client has two or more
+        // sessions today the two differ, so a small count after the figure
+        // says why. Capped like the title, so it can never widen the card:
+        // the count ellipsizes before the figure gives up any room.
+        let figureRow = new St.BoxLayout({
+            style: `spacing: 5px; max-width: ${Math.round(ROW_W / 2) - 36}px;`,
+        });
+        figureRow.add_child(new St.Label({
             text: figure > 0 ? formatTime(figure) : '0m',
             style: FIGURE_STYLE,
         }));
+        let sessionCount = client !== null && this._clock
+            ? this._clock.sessionsForDay(this._date).filter(s => s.client === client).length
+            : 0;
+        if (sessionCount >= 2) {
+            let count = new St.Label({
+                text: `${sessionCount} sessions`,
+                opacity: DIM_OPACITY,
+                y_align: Clutter.ActorAlign.END,
+                style: `font-size: 10px; padding-bottom: 3px; color: ${CARD_FG};`,
+            });
+            count.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+            figureRow.add_child(count);
+        }
+        clock.add_child(figureRow);
 
         if (tappable) {
             // Same inline-gradient hover swap as the screen time card.
