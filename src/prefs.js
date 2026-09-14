@@ -499,6 +499,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         page.add(clientsGroup);
 
         const clientRows = [];
+        let addRow = null;
 
         const renderClients = () => {
             for (let row of clientRows.splice(0))
@@ -568,7 +569,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                 clientRows.push(row);
             });
 
-            let addRow = new Adw.EntryRow({ title: 'Add a client' });
+            addRow = new Adw.EntryRow({ title: 'Add a client' });
             addRow.connect('entry-activated', () => {
                 let name = addRow.text.trim();
                 if (name.length === 0)
@@ -580,12 +581,65 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
                 writeClients(settings, next);
                 addRow.text = '';
                 renderClients();
+                // renderClients() built a new field, so move focus to it
+                // and the next name can be typed straight away.
+                addRow.grab_focus();
             });
             clientsGroup.add(addRow);
             clientRows.push(addRow);
         };
 
         renderClients();
+
+        // The popup's "Add client…" row sets prefs-focus to ask for this
+        // field (see clockSection.js), since the Shell can pass Preferences
+        // nothing else. The request is used up here, so a later open from
+        // the gear starts at the top as usual. It is also watched while the
+        // window is open, because the Shell then only raises the window.
+        const focusAddClient = () => {
+            if (settings.get_string('prefs-focus') !== 'add-client')
+                return;
+            settings.set_string('prefs-focus', '');
+            addRow.grab_focus();
+            // Focus alone does not scroll when the field was already the
+            // page's focus child, e.g. the window was left open and scrolled
+            // back up. The page scrolls through an Adw.ClampScrollable, not a
+            // Gtk.Viewport, so this centres the field by hand when it is off
+            // screen.
+            let scroller = addRow.get_ancestor(Gtk.ScrolledWindow);
+            let [ok, rect] = scroller ? addRow.compute_bounds(scroller) : [false, null];
+            if (!ok)
+                return;
+            let adj = scroller.vadjustment;
+            let top = rect.get_y();
+            let height = rect.get_height();
+            if (top < 0 || top + height > adj.page_size)
+                adj.value = adj.value + top - (adj.page_size - height) / 2;
+        };
+        // Waits for a painted, laid-out window, so the page can scroll down
+        // to the field. fillPreferencesWindow() can finish before or after
+        // the window is first shown.
+        const focusAfterPaint = () => {
+            let frameClock = window.get_frame_clock();
+            let paintId = frameClock.connect('after-paint', () => {
+                frameClock.disconnect(paintId);
+                focusAddClient();
+            });
+            window.queue_draw();
+        };
+        if (window.get_mapped()) {
+            focusAfterPaint();
+        } else {
+            let mapId = window.connect('map', () => {
+                window.disconnect(mapId);
+                focusAfterPaint();
+            });
+        }
+        const focusId = settings.connect('changed::prefs-focus', focusAddClient);
+        window.connect('close-request', () => {
+            settings.disconnect(focusId);
+            return false;
+        });
 
         clientsGroup.add(new ShortcutRow(
             settings, 'toggle-clock', 'Toggle the clock',

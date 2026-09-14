@@ -37,6 +37,11 @@
       <summary>Manual purge trigger</summary>
       <description>Internal, not user-facing. Set by the prefs UI to a unix timestamp to request an immediate one-time deletion of usage data older than 7 days.</description>
     </key>
+    <key name="prefs-focus" type="s">
+      <default>""</default>
+      <summary>Where Preferences should put focus when it opens</summary>
+      <description>Internal, not user-facing. Set to "add-client" by the popup's Add client row. Preferences focuses its Add a client field and resets the key to "".</description>
+    </key>
     <key name="show-total-in-panel" type="b">
       <default>true</default>
       <summary>Show today's total in the panel</summary>

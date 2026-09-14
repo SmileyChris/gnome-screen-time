@@ -31,6 +31,20 @@ export function isKnownClient(settings, name) {
     return readClients(settings).some(c => c.name === name);
 }
 
+// The client a paused clock would resume, or null. Paused means no session
+// is running but last-client still names a client on the list. last-client
+// is empty once stopped (stop forgets it), on a fresh install and before any
+// client has been clocked. It can also name a client since deleted from
+// Preferences (see isKnownClient). `running` is ClockStore.running. The clock
+// card and the client rows both call this, so they can never disagree about
+// which client is paused.
+export function pausedClient(settings, running) {
+    if (running)
+        return null;
+    let last = settings.get_string('last-client');
+    return isKnownClient(settings, last) ? last : null;
+}
+
 // What the popup lists: clients used today, in the order they were first
 // clocked, padded from the active list so the section never collapses to a
 // single row.

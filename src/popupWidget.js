@@ -7,7 +7,7 @@ import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ClockSection } from './clockSection.js';
-import { isKnownClient } from './clients.js';
+import { isKnownClient, pausedClient } from './clients.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow } from './usageRows.js';
 
@@ -85,7 +85,12 @@ export class PopupWidget {
         this._onOpenTimesheet = onOpenTimesheet;
         this._date = todayKeyFor(settings);
         this._timerSection = new AppTimerSection(store, settings);
-        this._clockSection = new ClockSection(clock, settings);
+        // The client list's "Add client…" row opens Preferences, the same
+        // way the footer's gear button does.
+        this._clockSection = new ClockSection(clock, settings, () => {
+            this._menu.close();
+            this._openPrefs?.();
+        });
         // Paths (joined with \0) whose rows are expanded, so a rebuild after
         // an edit lands where the user was. Cleared on reopen and date change.
         this._expanded = new Set();
@@ -156,9 +161,10 @@ export class PopupWidget {
         // The clock rows are a live control showing today's hours, so they sit
         // under today's breakdown only; paging back to an earlier day hides them
         // rather than mixing two days under one date heading.
-        if (this._date === todayKeyFor(this._settings) &&
-            this._clockSection.build(this._menu, () => this._build()))
+        if (this._date === todayKeyFor(this._settings)) {
+            this._clockSection.build(this._menu, () => this._build());
             this._addSeparator();
+        }
         this._timerSection.build(this._menu, () => this._build());
         if (this._timerSection.isOpen)
             this._addSeparator();
@@ -289,16 +295,13 @@ export class PopupWidget {
         // the pause and play buttons.
         let isToday = this._date === todayKeyFor(this._settings);
         let running = isToday ? (this._clock?.running ?? null) : null;
-        let last = this._settings.get_string('last-client');
-        // Not paused with last-client empty (stopped, a fresh install, or
-        // before any client has been clocked) or naming one since deleted
-        // from Preferences (see clients.js's isKnownClient). With nothing
-        // running and nothing to resume, the card is not reactive and has
-        // no hover highlight, rather than a live control that does nothing
-        // when pressed.
-        let paused = isToday && !!this._clock && running === null &&
-            isKnownClient(this._settings, last);
-        let client = running?.client ?? (paused ? last : null);
+        // See clients.js's pausedClient for exactly when that is. With
+        // nothing running and nothing to resume, the card is not reactive
+        // and has no hover highlight, rather than a live control that does
+        // nothing when pressed.
+        let resumable = isToday && this._clock ? pausedClient(this._settings, running) : null;
+        let paused = resumable !== null;
+        let client = running?.client ?? resumable;
         let canToggle = client !== null;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.

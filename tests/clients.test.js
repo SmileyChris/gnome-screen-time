@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import { test, assert, assertEqual } from './harness.js';
 import { FakeSettings } from './fakeSettings.js';
 import { ClockStore, CLOCK_FILE } from '../src/clockStore.js';
-import { readClients, writeClients, activeClients, recentClients, isKnownClient } from '../src/clients.js';
+import { readClients, writeClients, activeClients, recentClients, isKnownClient, pausedClient } from '../src/clients.js';
 
 function at(y, mo, d, h, mi = 0) {
     return GLib.DateTime.new_local(y, mo, d, h, mi, 0).to_unix() * 1000;
@@ -87,6 +87,35 @@ test('isKnownClient: false for an empty name', () => {
 test('isKnownClient: false against an empty client list', () => {
     let settings = new FakeSettings();
     assertEqual(isKnownClient(settings, 'ACME'), false);
+});
+
+// --- pausedClient ---
+
+test('pausedClient: last-client when nothing is running and it is still on the list', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    settings.set_string('last-client', 'ACME');
+    assertEqual(pausedClient(settings, null), 'ACME');
+});
+
+test('pausedClient: null while a session is running, whoever last-client names', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    settings.set_string('last-client', 'ACME');
+    assertEqual(pausedClient(settings, { client: 'ACME' }), null);
+});
+
+test('pausedClient: null once stopped, since stop empties last-client', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    assertEqual(pausedClient(settings, null), null);
+});
+
+test('pausedClient: null when last-client was deleted from the list', () => {
+    let settings = new FakeSettings();
+    writeClients(settings, [{ name: 'ACME', active: true, billable: true }]);
+    settings.set_string('last-client', 'Ghost');
+    assertEqual(pausedClient(settings, null), null);
 });
 
 // --- recentClients ---
