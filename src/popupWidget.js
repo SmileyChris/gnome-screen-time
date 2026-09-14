@@ -339,13 +339,19 @@ export class PopupWidget {
         // Pause and play both re-derive the state at tap time rather than
         // closing over `running`: the panel/shortcut can change the clock
         // while the popup is still open (see ClockSection.build()).
+        // Resuming from the card (a tap on it, or its play button) is done
+        // with the popup, so it closes. Pausing leaves it open to show the
+        // paused state, and so does a failed resume.
         let toggle = () => {
+            let resumed = false;
             try {
                 let last = this._settings.get_string('last-client');
-                if (this._clock.running)
+                if (this._clock.running) {
                     this._clock.stop();
-                else if (isKnownClient(this._settings, last))
+                } else if (isKnownClient(this._settings, last)) {
                     this._clock.start(last);
+                    resumed = true;
+                }
             } catch (e) {
                 // start()/stop() throw when the system clock is out of
                 // range; the popup has no toast, so log and let the
@@ -353,6 +359,8 @@ export class PopupWidget {
                 console.error(`[ScreenTime] clock toggle failed: ${e.message}`);
             } finally {
                 this._build();
+                if (resumed)
+                    this._menu.close();
             }
         };
         let stop = () => {
