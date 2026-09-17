@@ -142,6 +142,30 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         intervalGroup.add(intervalRow);
 
+        // Stored in seconds like the other tracking keys, shown in minutes.
+        const idleRow = new Adw.SpinRow({
+            title: 'Idle Timeout',
+            subtitle: 'Stop counting after this many minutes without keyboard or mouse input. 0 = never.',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 120,
+                step_increment: 1,
+            }),
+            value: Math.round(settings.get_int('idle-timeout') / 60),
+            snap_to_ticks: true,
+        });
+        idleRow.connect('notify::value', () => {
+            const seconds = idleRow.value * 60;
+            if (settings.get_int('idle-timeout') !== seconds)
+                settings.set_int('idle-timeout', seconds);
+        });
+        settings.connect('changed::idle-timeout', () => {
+            const minutes = Math.round(settings.get_int('idle-timeout') / 60);
+            if (idleRow.value !== minutes)
+                idleRow.value = minutes;
+        });
+        intervalGroup.add(idleRow);
+
         const dayStartRow = new Adw.SpinRow({
             title: 'Day Starts At',
             subtitle: 'Hour a new day begins. 4 keeps work after midnight on the previous day.',

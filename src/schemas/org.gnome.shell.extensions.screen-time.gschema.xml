@@ -14,6 +14,12 @@
       <summary>Max tracking interval (seconds)</summary>
       <description>Maximum interval between focus events before capping to prevent skewed data after suspend.</description>
     </key>
+    <key name="idle-timeout" type="i">
+      <default>600</default>
+      <range min="0" max="7200"/>
+      <summary>Idle timeout (seconds)</summary>
+      <description>Stop counting after this long without keyboard or mouse input, even while the screen stays on. Time up to the timeout is still counted. 0 disables idle detection.</description>
+    </key>
     <key name="day-start-hour" type="i">
       <default>0</default>
       <range min="0" max="23"/>

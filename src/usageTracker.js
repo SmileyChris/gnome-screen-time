@@ -1,4 +1,5 @@
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
@@ -6,6 +7,10 @@ import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js'
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
 const FLUSH_INTERVAL = 30;
+// org.gnome.SessionManager's idle inhibit flag (GSM_INHIBITOR_FLAG_IDLE).
+const IDLE_INHIBIT_FLAG = 8;
+// While idle but inhibited, ask again this often.
+const IDLE_RECHECK_SECONDS = 60;
 
 export class UsageTracker {
     constructor(store, settings) {
@@ -18,6 +23,14 @@ export class UsageTracker {
         // screenShield only exists when GNOME can lock at all (GDM + systemd),
         // so presence detection treats it as optional; max-interval is the backstop.
         this._shield = Main.screenShield ?? null;
+        // Set once the idle monitor has seen `idle-timeout` seconds without
+        // input, cleared on the next input. This covers the case the shield
+        // never sees: a screen kept awake while nobody is at the keyboard.
+        this._idle = false;
+        this._idleMonitor = global.backend.get_core_idle_monitor();
+        this._idleWatchId = 0;
+        this._activeWatchId = 0;
+        this._idleRecheckId = 0;
         this._away = this._computeAway();
 
         this._focusId = global.display.connect(
@@ -44,6 +57,108 @@ export class UsageTracker {
             GLib.PRIORITY_DEFAULT, FLUSH_INTERVAL,
             () => this._onFlushTick()
         );
+
+        this._armIdleWatch();
+        this._idleSettingId = this._settings.connect(
+            'changed::idle-timeout', () => this._armIdleWatch());
+    }
+
+    // (Re)installs the idle watch for the configured timeout. A timeout of 0
+    // disables idle detection. Called at start and on every setting change.
+    _armIdleWatch() {
+        // Clearing drops the active watch that would have cleared _idle, so
+        // come back first and let the new watch decide from scratch; Mutter
+        // fires an idle watch straight away if the session is already past
+        // the new threshold.
+        this._clearIdleWatches();
+        if (this._idle) {
+            this._idle = false;
+            this._onPresenceChanged();
+        }
+        let seconds = this._settings.get_int('idle-timeout');
+        if (seconds <= 0)
+            return;
+        this._idleWatchId = this._idleMonitor.add_idle_watch(
+            seconds * 1000, () => this._onIdle());
+    }
+
+    _clearIdleWatches() {
+        if (this._idleWatchId) {
+            this._idleMonitor.remove_watch(this._idleWatchId);
+            this._idleWatchId = 0;
+        }
+        if (this._activeWatchId) {
+            this._idleMonitor.remove_watch(this._activeWatchId);
+            this._activeWatchId = 0;
+        }
+        this._clearIdleRecheck();
+    }
+
+    // No input for the whole timeout. If something inhibits idle (a video, a
+    // presentation: the same inhibitors that hold off the screensaver) the
+    // user is presumably still watching, so keep counting and look again in a
+    // minute. Otherwise stop counting until the next input.
+    //
+    // Observed on GNOME 50 Wayland: Mutter already withholds idle watches
+    // while idle is inhibited, so the inhibitor check rarely runs there. It
+    // stays as the backstop for sessions where it does not.
+    _onIdle() {
+        if (this._idle)
+            return;
+        this._armActiveWatch();
+        this._checkIdleInhibited();
+    }
+
+    _checkIdleInhibited() {
+        this._idleRecheckId = 0;
+        Gio.DBus.session.call(
+            'org.gnome.SessionManager', '/org/gnome/SessionManager',
+            'org.gnome.SessionManager', 'IsInhibited',
+            new GLib.Variant('(u)', [IDLE_INHIBIT_FLAG]), null,
+            Gio.DBusCallFlags.NONE, 2000, null,
+            (conn, res) => {
+                let inhibited = false;
+                try {
+                    [inhibited] = conn.call_finish(res).deepUnpack();
+                } catch (e) {
+                    // No session manager to ask: fall back to plain idleness.
+                }
+                // The user came back while we were asking.
+                if (!this._activeWatchId)
+                    return;
+                if (inhibited) {
+                    this._idleRecheckId = GLib.timeout_add_seconds(
+                        GLib.PRIORITY_DEFAULT, IDLE_RECHECK_SECONDS, () => {
+                            this._idleRecheckId = 0;
+                            this._checkIdleInhibited();
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    return;
+                }
+                this._idle = true;
+                this._onPresenceChanged();
+            });
+    }
+
+    // One-shot: Mutter removes the watch itself when it fires.
+    _armActiveWatch() {
+        if (this._activeWatchId)
+            return;
+        this._activeWatchId = this._idleMonitor.add_user_active_watch(() => {
+            this._activeWatchId = 0;
+            this._clearIdleRecheck();
+            if (this._idle) {
+                this._idle = false;
+                this._onPresenceChanged();
+            }
+        });
+    }
+
+    _clearIdleRecheck() {
+        if (this._idleRecheckId) {
+            GLib.source_remove(this._idleRecheckId);
+            this._idleRecheckId = 0;
+        }
     }
 
     _getMaxInterval() {
@@ -51,7 +166,8 @@ export class UsageTracker {
     }
 
     _computeAway() {
-        return !!(this._shield && (this._shield.active || this._shield.locked));
+        return this._idle ||
+            !!(this._shield && (this._shield.active || this._shield.locked));
     }
 
     _currentApp() {
@@ -154,6 +270,11 @@ export class UsageTracker {
             GLib.source_remove(this._flushId);
             this._flushId = null;
         }
+        if (this._idleSettingId) {
+            this._settings.disconnect(this._idleSettingId);
+            this._idleSettingId = null;
+        }
+        this._clearIdleWatches();
         this._flush(Date.now());
     }
 }
