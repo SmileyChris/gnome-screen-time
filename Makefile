@@ -1,12 +1,23 @@
-UUID          = screen-time@gnome-screen-time
-VERSION       = 1.1.0
-EXTENSION_DIR = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
-SRC_DIR       = src
-SCHEMAS_DIR   = $(SRC_DIR)/schemas
-DIST_DIR      = dist
-PACK_FILE     = $(DIST_DIR)/$(UUID).shell-extension.zip
+UUID           = screen-time@gnome-screen-time
+VERSION        = 1.1.0
+EXTENSIONS_DIR = $(HOME)/.local/share/gnome-shell/extensions
+EXTENSION_DIR  = $(EXTENSIONS_DIR)/$(UUID)
+# `make reload` installs under a throwaway UUID of this shape.
+DEV_UUID_GLOB  = screen-time-dev-*@gnome-screen-time
+SRC_DIR        = src
+SCHEMAS_DIR    = $(SRC_DIR)/schemas
+DIST_DIR       = dist
+PACK_FILE      = $(DIST_DIR)/$(UUID).shell-extension.zip
 
-.PHONY: all build schemas install uninstall pack lint check test clean restart
+.PHONY: all build schemas install uninstall reload unreload pack lint check test clean restart
+
+# Disables and deletes every dev copy left behind by `make reload`.
+REMOVE_DEV_COPIES = for d in $(EXTENSIONS_DIR)/$(DEV_UUID_GLOB); do \
+	  [ -d "$$d" ] || continue; \
+	  gnome-extensions disable "$$(basename $$d)" 2>/dev/null || true; \
+	  rm -rf "$$d"; \
+	  echo "Removed $$(basename $$d)"; \
+	done
 
 all: build
 
@@ -23,7 +34,47 @@ install: build
 	@mkdir -p $(EXTENSION_DIR)
 	@cp -r $(SRC_DIR)/* $(EXTENSION_DIR)/
 	@echo "Installed to $(EXTENSION_DIR)"
+	@# A dev copy from `make reload` would otherwise stay enabled across
+	@# logins with the production copy switched off; installing means we
+	@# are done iterating.
+	@if ls -d $(EXTENSIONS_DIR)/$(DEV_UUID_GLOB) >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory unreload; \
+	fi
 	@echo "Reload GNOME Shell: log out/in on Wayland, or Alt+F2 → 'r' on X11."
+
+# Live reload without logging out. GNOME 45+ caches an extension's ES modules
+# for the life of the Shell, so re-enabling the same UUID can never pick up new
+# code; a fresh UUID has fresh module URLs and loads what is on disk now. The
+# Shell does not watch the extensions directory either, so the new copy is
+# handed to its extension manager over org.gnome.Shell.Eval, which answers only
+# while Looking Glass's Unsafe Mode is on (Alt+F2, `lg`, the toggle in its top
+# bar). Both copies share the schema and the usage file, so exactly one of them
+# is enabled at any time: this disables the production UUID and any earlier dev
+# copy before enabling the new one.
+reload: build
+	@$(REMOVE_DEV_COPIES)
+	@new=screen-time-dev-$$(date +%s)@gnome-screen-time; \
+	dir=$(EXTENSIONS_DIR)/$$new; tmp=$$(mktemp -d); \
+	cp -r $(SRC_DIR)/* $$tmp/ && \
+	python3 -c 'import json,sys; p,u=sys.argv[1:3]; m=json.load(open(p)); m["uuid"]=u; m["name"]+=" (dev)"; json.dump(m,open(p,"w"),indent=4)' $$tmp/metadata.json $$new && \
+	mv $$tmp $$dir || exit 1; \
+	gnome-extensions disable $(UUID) 2>/dev/null || true; \
+	js="const M = Main.extensionManager; const ext = M.createExtensionObject('$$new', Gio.File.new_for_path('$$dir'), ExtensionUtils.ExtensionType.PER_USER); M.loadExtension(ext).then(() => M.enableExtension('$$new')).catch(e => logError(e, 'reload')); 'queued'"; \
+	out=$$(gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell --method org.gnome.Shell.Eval "$$js" 2>&1); \
+	case "$$out" in \
+	  *true*) ;; \
+	  "(false, '')") echo "Shell refused Eval. Turn Unsafe Mode on once per login: Alt+F2, type lg, click the Unsafe Mode toggle in Looking Glass's top bar. Then rerun make reload."; \
+	    rm -rf $$dir; gnome-extensions enable $(UUID); exit 1;; \
+	  *) echo "Eval failed: $$out"; rm -rf $$dir; gnome-extensions enable $(UUID); exit 1;; \
+	esac; \
+	sleep 1; state=$$(gnome-extensions info $$new 2>/dev/null | sed -n 's/^ *State: //p'); \
+	echo "Loaded $$new (state: $${state:-unknown})"; \
+	echo "Errors, if any: journalctl --user -o cat -b 0 /usr/bin/gnome-shell | grep -A5 $$new | tail -20"
+
+# Back to the production copy: remove every dev copy, re-enable the real UUID.
+unreload:
+	@$(REMOVE_DEV_COPIES)
+	@gnome-extensions enable $(UUID) && echo "Enabled $(UUID)"
 
 uninstall:
 	@rm -rf $(EXTENSION_DIR)
