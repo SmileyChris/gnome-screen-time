@@ -31,6 +31,8 @@ export class UsageTracker {
         this._idleWatchId = 0;
         this._activeWatchId = 0;
         this._idleRecheckId = 0;
+        // Cancels the inhibit query still in flight when the extension stops.
+        this._cancellable = new Gio.Cancellable();
         this._away = this._computeAway();
 
         this._focusId = global.display.connect(
@@ -73,8 +75,7 @@ export class UsageTracker {
     _armIdleWatch() {
         // Clearing drops the active watch that would have cleared _idle, so
         // come back first and let the new watch decide from scratch; Mutter
-        // fires an idle watch straight away if the session is already past
-        // the new threshold.
+        // re-fires immediately if the session is already past the threshold.
         this._clearIdleWatches();
         if (this._idle) {
             this._idle = false;
@@ -99,14 +100,9 @@ export class UsageTracker {
         this._clearIdleRecheck();
     }
 
-    // No input for the whole timeout. If something inhibits idle (a video, a
-    // presentation: the same inhibitors that hold off the screensaver) the
-    // user is presumably still watching, so keep counting and look again in a
-    // minute. Otherwise stop counting until the next input.
-    //
-    // Observed on GNOME 50 Wayland: Mutter already withholds idle watches
-    // while idle is inhibited, so the inhibitor check rarely runs there. It
-    // stays as the backstop for sessions where it does not.
+    // No input for the whole timeout. Something inhibiting idle (a video, a
+    // presentation) means the user is still watching, so keep counting and
+    // look again in a minute; otherwise stop until the next input.
     _onIdle() {
         if (this._idle)
             return;
@@ -115,12 +111,11 @@ export class UsageTracker {
     }
 
     _checkIdleInhibited() {
-        this._idleRecheckId = 0;
         Gio.DBus.session.call(
             'org.gnome.SessionManager', '/org/gnome/SessionManager',
             'org.gnome.SessionManager', 'IsInhibited',
             new GLib.Variant('(u)', [IDLE_INHIBIT_FLAG]), null,
-            Gio.DBusCallFlags.NONE, 2000, null,
+            Gio.DBusCallFlags.NONE, 2000, this._cancellable,
             (conn, res) => {
                 let inhibited = false;
                 try {
@@ -132,6 +127,8 @@ export class UsageTracker {
                 if (!this._activeWatchId)
                     return;
                 if (inhibited) {
+                    // Never leave an older recheck registered but unreachable.
+                    this._clearIdleRecheck();
                     this._idleRecheckId = GLib.timeout_add_seconds(
                         GLib.PRIORITY_DEFAULT, IDLE_RECHECK_SECONDS, () => {
                             this._idleRecheckId = 0;
@@ -283,7 +280,10 @@ export class UsageTracker {
             this._settings.disconnect(this._idleSettingId);
             this._idleSettingId = null;
         }
+        // Watches first: clearing _activeWatchId is what makes a late reply to
+        // the cancelled inhibit query bail out instead of marking us idle.
         this._clearIdleWatches();
+        this._cancellable.cancel();
         this._flush(Date.now());
     }
 }

@@ -112,7 +112,10 @@ function buildHistogram(days) {
 
 export default class ScreenTimePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
+        // Anchored to the window: nothing else holds a reference, and a
+        // collected Gio.Settings silently stops every binding on this page.
         const settings = this.getSettings();
+        window._settings = settings;
         const data = loadUsageData();
 
         const page = new Adw.PreferencesPage();

@@ -10,14 +10,9 @@ export const STORE_FILE = GLib.build_filenamev([STORE_DIR, 'usage.json']);
 const AUTOSAVE_INTERVAL = 30;
 const MANUAL_PURGE_DAYS = 7;
 
-// Date keys double as the on-disk JSON keys, so this format is a storage
-// contract, so every caller formats through here rather than repeating it.
-//
-// `startHour` moves the boundary between days off midnight, so work that runs
-// past it still counts towards the day it started on. The hours are subtracted
-// from the timestamp before the date is read, which leaves DST to GLib. Pass
-// it only for a real instant: a key shifted by whole days is already a logical
-// day and must not be offset again.
+// Date keys double as the on-disk JSON keys, so every caller formats here.
+// `startHour` moves the day boundary off midnight, so pass it only for a real
+// instant: a key shifted by whole days is already a logical day.
 export function dateKey(dateTime, startHour = 0) {
     let at = startHour > 0 ? dateTime.add_hours(-startHour) : dateTime;
     return at.format('%Y-%m-%d');
@@ -33,10 +28,9 @@ export function todayKeyFor(settings) {
     return todayKey(settings.get_int('day-start-hour'));
 }
 
-// appId -> displayName for every app that appears anywhere in `data`. Shared
-// by UsageStore (live in-memory data) and prefs.js (data read from disk) so
-// both pick from the exact same set of "known" apps. Skips "Unknown",
-// Shell's fallback name for windows it can't identify, not a real app.
+// appId -> displayName for every app in `data`, shared by UsageStore and
+// prefs.js so both pick from the same set. Skips "Unknown", Shell's fallback
+// name for windows it can't identify.
 export function knownAppsFromData(data) {
     let known = new Map();
     for (let day of Object.values(data)) {
@@ -160,8 +154,10 @@ export class UsageStore {
                     this._dirty = true;
                 }
             }
-            if (Object.keys(day).length === 0)
+            if (Object.keys(day).length === 0) {
                 delete this._data[date];
+                this._dirty = true;
+            }
         }
     }
 

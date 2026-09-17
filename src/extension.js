@@ -18,9 +18,9 @@ export default class ScreenTimeExtension extends Extension {
         this._limitNotifier = new LimitNotifier(this._settings);
 
         this._store.onChange = (appId, displayName, seconds) => {
-            this._indicator.setTotal(this._store.getTodayTotal());
+            this._indicator?.setTotal(this._store.getTodayTotal());
             if (appId)
-                this._limitNotifier.checkLimit(appId, displayName, seconds);
+                this._limitNotifier?.checkLimit(appId, displayName, seconds);
         };
         this._indicator.setTotal(this._store.getTodayTotal());
 
