@@ -232,6 +232,15 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         purgeRow.add_suffix(purgeButton);
         historyGroup.add(purgeRow);
 
+        // Read from metadata.json rather than a constant here, so the version
+        // has exactly one source of truth and can never drift from the build.
+        const aboutGroup = new Adw.PreferencesGroup({title: 'About'});
+        page.add(aboutGroup);
+        aboutGroup.add(new Adw.ActionRow({
+            title: 'Version',
+            subtitle: this.metadata['version-name'] ?? `${this.metadata.version ?? ''}`,
+        }));
+
         window.set_focus(null);
     }
 
