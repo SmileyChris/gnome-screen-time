@@ -61,6 +61,11 @@ export class UsageTracker {
         this._armIdleWatch();
         this._idleSettingId = this._settings.connect(
             'changed::idle-timeout', () => this._armIdleWatch());
+
+        // enable() runs at login and again after every unlock, where the window
+        // that is already focused fires no focus change of its own. Sync once
+        // from it: the same connect-then-call-once pattern extension.js uses.
+        this._onFocus();
     }
 
     // (Re)installs the idle watch for the configured timeout. A timeout of 0
@@ -184,6 +189,10 @@ export class UsageTracker {
             let wmClass = win.get_wm_class();
             if (wmClass)
                 return { id: `wmclass:${wmClass}`, name: app.get_name() || wmClass };
+            // No .desktop file and no WM_CLASS: nothing stable to key on, and
+            // Shell names these "Unknown". They are transient windows (portals,
+            // tooltips, switchers), never an app you used, so skip them.
+            return null;
         }
         return { id: app.get_id(), name: app.get_name() };
     }

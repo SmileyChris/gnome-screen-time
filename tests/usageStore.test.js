@@ -224,3 +224,43 @@ test('save: a store torn down before the read lands writes nothing', async () =>
     assertEqual(readStoreFile(), stored,
         'saving unloaded data would clobber the history it never read');
 });
+
+test('addTime: a sub-second focus blink is not recorded as an app', async () => {
+    let store = await freshStore();
+    let calls = [];
+    store.onChange = (...args) => calls.push(args);
+
+    store.addTime('blink.desktop', 'Unknown', 0.4);
+
+    assertEqual(store.getUsageForDate(todayKey()), [],
+        'a credit that rounds to zero must not create a row');
+    assertEqual(calls, [], 'and must not announce a change');
+    store.destroy();
+});
+
+test('addTime: sub-second blinks never mask a real credit', async () => {
+    let store = await freshStore();
+    store.addTime('a.desktop', 'A', 0.4);
+    store.addTime('a.desktop', 'A', 90);
+    assertEqual(store.getTotalForDate(todayKey()), 90);
+    store.destroy();
+});
+
+test('load: zero-second rows written by older versions are swept out', async () => {
+    let store = await freshStore(new FakeSettings(), {
+        [todayKey()]: {
+            'a.desktop': { displayName: 'A', seconds: 60 },
+            'window:1': { displayName: 'Unknown', seconds: 0 },
+        },
+        [daysAgoKey(1)]: {
+            'window:2': { displayName: 'Unknown', seconds: 0 },
+        },
+    });
+
+    assertEqual(store.getUsageForDate(todayKey()),
+        [{ appId: 'a.desktop', displayName: 'A', seconds: 60 }]);
+    assertEqual(store.getTotalForDate(todayKey()), 60, 'no total moves');
+    assertEqual(store.getOldestDate(), todayKey(),
+        'a day left with nothing in it is dropped too');
+    store.destroy();
+});

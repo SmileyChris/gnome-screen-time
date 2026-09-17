@@ -29,11 +29,16 @@ function loadUsageData() {
 
 // Oldest first, so the chart reads left-to-right ending at today.
 function lastDays(data, count, startHour) {
+    // Shift into logical-day space once, here, so the key of a day and the
+    // weekday printed under it come from the same instant. dateKey() must then
+    // be called without the hour, or every day would be offset a second time.
     let now = GLib.DateTime.new_now_local();
+    if (startHour > 0)
+        now = now.add_hours(-startHour);
     let days = [];
     for (let i = count - 1; i >= 0; i--) {
         let day = now.add_days(-i);
-        let seconds = Object.values(data[dateKey(day, startHour)] ?? {})
+        let seconds = Object.values(data[dateKey(day)] ?? {})
             .reduce((s, a) => s + a.seconds, 0);
         days.push({
             label: i === 0 ? 'Today' : day.format('%a'),

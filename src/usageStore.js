@@ -109,6 +109,7 @@ export class UsageStore {
         if (loaded)
             this._merge(loaded);
         this._loaded = true;
+        this._dropEmptyEntries();
         this._cleanup();
         this.onChange?.();
     }
@@ -148,6 +149,22 @@ export class UsageStore {
         }
     }
 
+    // Zero-second rows written before addTime refused them. They hold no time,
+    // so dropping them changes no total anywhere; it only stops them being
+    // counted as apps. A day left with nothing in it goes too.
+    _dropEmptyEntries() {
+        for (let [date, day] of Object.entries(this._data)) {
+            for (let [appId, info] of Object.entries(day)) {
+                if (!info.seconds) {
+                    delete day[appId];
+                    this._dirty = true;
+                }
+            }
+            if (Object.keys(day).length === 0)
+                delete this._data[date];
+        }
+    }
+
     _cleanup() {
         let days = this._getRetentionDays();
         if (days <= 0) return;
@@ -177,12 +194,19 @@ export class UsageStore {
     }
 
     addTime(appId, displayName, seconds) {
+        // A focus blink shorter than half a second rounds to nothing. Storing it
+        // anyway would add a zero-second app to the day, which inflates the
+        // popup's "Other N apps" count and grows the file for no time at all.
+        let secs = Math.round(seconds);
+        if (secs <= 0)
+            return;
+
         let today = todayKey(this._dayStartHour());
         if (!this._data[today])
             this._data[today] = {};
         if (!this._data[today][appId])
             this._data[today][appId] = { displayName, seconds: 0 };
-        this._data[today][appId].seconds += Math.round(seconds);
+        this._data[today][appId].seconds += secs;
         this._data[today][appId].displayName = displayName;
         this._dirty = true;
         this.onChange?.(appId, displayName, this._data[today][appId].seconds);
