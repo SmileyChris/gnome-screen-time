@@ -42,8 +42,13 @@ as a smoke test.
     make companion-install    # host manifests for Brave and Zen, pointing at this checkout
 
 Brave: `brave://extensions`, enable Developer mode, Load unpacked,
-choose `dist/webext-brave`. Chrome: the same at `chrome://extensions` with `dist/webext-chrome`. The manifest carries a fixed `key`, so the id is
-stable and matches the host manifest.
+choose `dist/webext-brave`. Chrome: the same at `chrome://extensions` with
+`dist/webext-chrome`. The manifest carries no signing key, so Chromium derives
+each build's id from its absolute directory path; `make companion-install`
+derives the same id the same way and writes it into the host manifest. Moving
+or renaming the checkout changes both, so re-run `make companion-install` and
+reload the unpacked extension. A store-published build gets its key, and a
+permanent id, from the store.
 
 Zen: `about:config`, set `xpinstall.signatures.required` to `false`, then
 open `dist/screen-time-zen.xpi`. If Zen ignores the pref (release builds of

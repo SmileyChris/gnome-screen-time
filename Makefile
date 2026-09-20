@@ -129,15 +129,16 @@ companion-build:
 companion-install:
 	@chmod +x $(HOST_SCRIPT)
 	@mkdir -p $(BRAVE_HOSTS_DIR) $(CHROME_HOSTS_DIR) $(ZEN_HOSTS_DIR)
-	@id=$$($(COMPANION_TOOL) extension-id) && test -n "$$id" && \
-	sed -e 's|@PATH@|$(HOST_SCRIPT)|' -e "s|@BRAVE_ID@|$$id|" companion/host/brave.json.in > $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) && \
-	sed -e 's|@PATH@|$(HOST_SCRIPT)|' -e "s|@BRAVE_ID@|$$id|" companion/host/brave.json.in > $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) && \
+	@brave_id=$$($(COMPANION_TOOL) extension-id brave) && test -n "$$brave_id" && \
+	chrome_id=$$($(COMPANION_TOOL) extension-id chrome) && test -n "$$chrome_id" && \
+	sed -e 's|@PATH@|$(HOST_SCRIPT)|' -e "s|@ID@|$$brave_id|" companion/host/chromium.json.in > $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) && \
+	sed -e 's|@PATH@|$(HOST_SCRIPT)|' -e "s|@ID@|$$chrome_id|" companion/host/chromium.json.in > $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) && \
 	sed -e 's|@PATH@|$(HOST_SCRIPT)|' companion/host/zen.json.in > $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST) && \
 	python3 -m json.tool $(BRAVE_HOSTS_DIR)/$(HOST_MANIFEST) >/dev/null && \
 	python3 -m json.tool $(CHROME_HOSTS_DIR)/$(HOST_MANIFEST) >/dev/null && \
 	python3 -m json.tool $(ZEN_HOSTS_DIR)/$(HOST_MANIFEST) >/dev/null && \
 	$(COMPANION_TOOL) ping && \
-	echo "Host registered for Brave, Chrome (extension id $$id) and Zen." && \
+	echo "Host registered for Brave ($$brave_id), Chrome ($$chrome_id) and Zen." && \
 	echo "Brave: brave://extensions, Developer mode, Load unpacked, pick dist/webext-brave" && \
 	echo "Chrome: chrome://extensions, Developer mode, Load unpacked, pick dist/webext-chrome" && \
 	echo "Zen:   about:config xpinstall.signatures.required=false, then open dist/screen-time-zen.xpi" && \

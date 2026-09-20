@@ -3,10 +3,10 @@
 
     build.py build          -> dist/webext-brave/, dist/webext-chrome/, their zips,
                                dist/screen-time-zen.xpi
-    build.py extension-id   -> Chromium extension id derived from manifest key
+    build.py extension-id [browser]
+                            -> Chromium extension id for that unpacked build
     build.py ping           -> framed {ping:true} to the host, expects {pong:true}
 """
-import base64
 import hashlib
 import json
 import os
@@ -20,8 +20,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 WEBEXT = os.path.join(ROOT, 'companion', 'webext')
 HOST = os.path.join(ROOT, 'companion', 'host', 'screen-time-host.js')
 DIST = os.path.join(ROOT, 'dist')
-# An allowlist, never a directory listing: chromium-key.pem lives in the same
-# directory as these sources and must never be copied into a build.
+# An allowlist, never a directory listing, so a stray file in this directory
+# never reaches a build.
 SOURCES = ['background.js', 'rules.js']
 
 
@@ -30,10 +30,14 @@ def load_manifest():
         return json.load(f)
 
 
-def extension_id(manifest):
-    # Chromium: SHA-256 of the DER public key, first 32 hex chars, 0-9a-f -> a-p.
-    der = base64.b64decode(manifest['key'])
-    digest = hashlib.sha256(der).hexdigest()[:32]
+def extension_id(browser):
+    # An unpacked Chromium extension has no signing key, so its id comes from the
+    # absolute directory path: SHA-256 of the path, first 32 hex chars, 0-9a-f ->
+    # a-p. Chromium resolves symlinks first, so realpath here too. Nothing in the
+    # source names a publisher; a store-published build gets its key from the
+    # store. Each browser loads its own tree, so each has its own id.
+    path = os.path.realpath(os.path.join(DIST, f'webext-{browser}'))
+    digest = hashlib.sha256(path.encode()).hexdigest()[:32]
     return ''.join(chr(ord('a') + int(c, 16)) for c in digest)
 
 
@@ -65,14 +69,13 @@ def build():
 
     brave_tree = write_tree('brave', base)
     zip_tree(brave_tree, os.path.join(DIST, 'screen-time-brave.zip'))
-    # Same Chromium build and id, a different browser constant.
+    # The same Chromium build, a different browser constant and its own id.
     chrome_tree = write_tree('chrome', base)
     zip_tree(chrome_tree, os.path.join(DIST, 'screen-time-chrome.zip'))
 
     with open(os.path.join(WEBEXT, 'manifest.gecko.json')) as f:
         overlay = json.load(f)
     gecko = dict(base)
-    gecko.pop('key', None)   # Gecko rejects unknown top-level keys with a warning
     gecko.update(overlay)
     zen_tree = write_tree('zen', gecko)
     zip_tree(zen_tree, os.path.join(DIST, 'screen-time-zen.xpi'))
@@ -80,7 +83,8 @@ def build():
     firefox_tree = write_tree('firefox', gecko)
     zip_tree(firefox_tree, os.path.join(DIST, 'screen-time-firefox.xpi'))
 
-    print(f'built {brave_tree}, {chrome_tree} (id {extension_id(base)}), {zen_tree} and {firefox_tree}')
+    print(f'built {brave_tree} (id {extension_id("brave")}), '
+          f'{chrome_tree} (id {extension_id("chrome")}), {zen_tree} and {firefox_tree}')
 
 
 def ping():
@@ -102,7 +106,7 @@ def main():
     if cmd == 'build':
         build()
     elif cmd == 'extension-id':
-        print(extension_id(load_manifest()))
+        print(extension_id(sys.argv[2] if len(sys.argv) > 2 else 'brave'))
     elif cmd == 'ping':
         ping()
     else:
