@@ -38,33 +38,60 @@ function segmentsOf(url) {
         .map(s => decodeSegment(s).slice(0, MAX_SEGMENT));
 }
 
-// Segments that are never the unit anyone means: a date or id component, and
-// a documentation site's locale prefix. Only stripped from the front of a
-// path, and only where no host rule applies.
+// A date or id component in front of the real unit (/2026/09/21/<section>).
 const NUMERIC_SEGMENT = /^\d+$/;
-const LOCALE_SEGMENT = /^[a-z]{2}(-[a-z]{2,4})?$/i;
+// A segment this short is a routing prefix, not a unit: /r/<sub>, /c/<channel>,
+// /us/<section>, /dp/<product>. It is reported with the segment it routes to.
+const MAX_PREFIX = 2;
+// The most segments a default detail joins. A date is three, and the cap
+// keeps an all-numeric or prefix-stacked path from becoming a long key.
+const MAX_DETAIL_SEGMENTS = 3;
+// Languages sites actually put first in a path. Recognising one lets its
+// regional forms share a row (fr-FR and fr both report fr) and lets the rule
+// carry on past it. Deliberately short of full ISO 639-1: id, is, no, ms and
+// the like are far more often ordinary path words (/id/123), and as plain
+// prefixes they keep the id that follows them.
+const LOCALE_LANGUAGES = new Set([
+    'ar', 'bg', 'ca', 'cs', 'da', 'de', 'el', 'en', 'es', 'et', 'fa', 'fi',
+    'fr', 'he', 'hi', 'hr', 'hu', 'it', 'ja', 'ko', 'lt', 'lv', 'nb', 'nl',
+    'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sr', 'sv', 'th', 'tr', 'uk', 'vi',
+    'zh',
+]);
+// The optional part after the language: a country (en-US), a script
+// (zh-Hans) or a UN M.49 region (es-419).
+const LOCALE_REGION = /^([a-z]{2}|[a-z]{4}|\d{3})$/;
 
-function skippable(segment) {
-    return NUMERIC_SEGMENT.test(segment) || LOCALE_SEGMENT.test(segment);
+// The language of a locale segment, or null if the segment is not one.
+function localeLanguage(segment) {
+    let [language, region, ...rest] = segment.toLowerCase().split(/[-_]/);
+    if (rest.length > 0 || !LOCALE_LANGUAGES.has(language))
+        return null;
+    if (region !== undefined && !LOCALE_REGION.test(region))
+        return null;
+    return language;
 }
 
-// The first segment worth recording, or - for a path with no such segment,
-// like a date archive - the skipped run itself: "21" alone would merge every
-// month and year into one row, while "2026/09/21" is what the page is. Capped
-// at the length of a date so an all-numeric id path cannot become a huge key.
-const MAX_SKIPPED_JOIN = 3;
-
-function defaultDetail(segs) {
+// Leading dates are skipped, unless the path is nothing but dates, which then
+// is the unit: "21" alone would merge every month and year into one row. A
+// locale is kept as its language and the rule carries on after it, so
+// /en/t/<topic> keeps the topic. Any other prefix takes exactly one segment:
+// /r/nz/comments must be the same row as /r/nz.
+function defaultParts(segs) {
     let i = 0;
-    while (i < segs.length && skippable(segs[i]))
+    while (i < segs.length && NUMERIC_SEGMENT.test(segs[i]))
         i++;
     if (i === segs.length)
-        return segs.slice(0, MAX_SKIPPED_JOIN).join('/');
-    // A single character is a routing prefix, not a unit: /r/<sub>,
-    // /c/<channel>, /t/<topic>, /u/<user>. Keep it with the name it routes to.
-    if (segs[i].length === 1 && segs[i + 1])
-        return `${segs[i]}/${segs[i + 1]}`;
-    return segs[i];
+        return segs.slice(0, MAX_DETAIL_SEGMENTS);
+    let language = localeLanguage(segs[i]);
+    if (language)
+        return [language, ...defaultParts(segs.slice(i + 1))];
+    if (segs[i].length <= MAX_PREFIX && i + 1 < segs.length)
+        return [segs[i], segs[i + 1]];
+    return [segs[i]];
+}
+
+function defaultDetail(segs) {
+    return defaultParts(segs).slice(0, MAX_DETAIL_SEGMENTS).join('/');
 }
 
 function inDomain(host, domain) {

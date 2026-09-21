@@ -140,30 +140,20 @@ test('rules: a leading run of date segments is skipped', () => {
     assertEqual(reportFor('https://example.com/2026/09/a-post', false).detail, 'a-post');
 });
 
-test('rules: a leading locale segment is skipped', () => {
-    assertEqual(reportFor('https://developer.mozilla.org/en-US/docs/Web/API/fetch', false),
-        { host: 'developer.mozilla.org', detail: 'docs' });
-    assertEqual(reportFor('https://developer.mozilla.org/ja/docs/Web', false).detail, 'docs');
-    assertEqual(reportFor('https://example.com/pt-BR/help/x', false).detail, 'help');
-});
-
-test('rules: a path of nothing but skippable segments reports them whole', () => {
+test('rules: a path of nothing but dates reports them whole', () => {
     assertEqual(reportFor('https://example.com/2026/09/21', false).detail, '2026/09/21');
     assertEqual(reportFor('https://example.com/2026/09', false).detail, '2026/09');
     assertEqual(reportFor('https://example.com/2026', false).detail, '2026');
-    assertEqual(reportFor('https://example.com/en-US', false).detail, 'en-US');
-    assertEqual(reportFor('https://example.com/en-US/2026', false).detail, 'en-US/2026');
 });
 
-test('rules: a wholly skippable path is capped so it cannot become a huge key', () => {
+test('rules: a wholly numeric path is capped so it cannot become a huge key', () => {
     assertEqual(reportFor('https://example.com/1/2/3/4/5/6', false).detail, '1/2/3');
 });
 
-test('rules: skipping does not apply to hosts with their own rule', () => {
+test('rules: the default rule does not apply to hosts with their own rule', () => {
     assertEqual(reportFor('https://github.com/de/repo', false).detail, 'de/repo');
     assertEqual(reportFor('https://en.wikipedia.org/wiki/2026', false).detail, '2026');
     assertEqual(reportFor('https://npmjs.com/package/left-pad', false).detail, 'left-pad');
-    assertEqual(reportFor('https://reddit.com/r/gnome', false).detail, 'r/gnome');
 });
 
 test('rules: a single-character prefix takes the next segment with it', () => {
@@ -175,10 +165,59 @@ test('rules: a single-character prefix takes the next segment with it', () => {
     assertEqual(reportFor('https://reddit.com/u/someone', false).detail, 'u/someone');
 });
 
-test('rules: a single-character prefix with nothing after it stands alone', () => {
-    assertEqual(reportFor('https://example.com/c', false).detail, 'c');
+test('rules: a two-character prefix takes the next segment with it', () => {
+    assertEqual(reportFor('https://www.amazon.com/dp/B0CX23V2ZK', false).detail, 'dp/B0CX23V2ZK');
+    assertEqual(reportFor('https://www.linkedin.com/in/chris', false).detail, 'in/chris');
+    assertEqual(reportFor('https://example.com/id/12345/edit', false).detail, 'id/12345');
+    assertEqual(reportFor('https://somenews.com/us/politics/story', false).detail, 'us/politics');
+    assertEqual(reportFor('https://www.apple.com/nz/iphone/', false).detail, 'nz/iphone');
+    assertEqual(reportFor('https://example.com/US/shop', false).detail, 'US/shop');
 });
 
-test('rules: a single-character prefix after a skipped locale still extends', () => {
-    assertEqual(reportFor('https://example.com/en/t/topic', false).detail, 't/topic');
+test('rules: a prefix with nothing after it stands alone', () => {
+    assertEqual(reportFor('https://example.com/c', false).detail, 'c');
+    assertEqual(reportFor('https://example.com/nz', false).detail, 'nz');
+});
+
+test('rules: a prefix takes exactly one segment, so a short subreddit is one row', () => {
+    assertEqual(reportFor('https://reddit.com/r/nz/comments/abc', false).detail, 'r/nz');
+    assertEqual(reportFor('https://reddit.com/r/nz', false).detail, 'r/nz');
+});
+
+test('rules: a locale is kept as its language, then the rule applies to the rest', () => {
+    assertEqual(reportFor('https://developer.mozilla.org/en-US/docs/Web/API/fetch', false),
+        { host: 'developer.mozilla.org', detail: 'en/docs' });
+    assertEqual(reportFor('https://developer.mozilla.org/ja/docs/Web', false).detail, 'ja/docs');
+    assertEqual(reportFor('https://www.apple.com/de/iphone/', false).detail, 'de/iphone');
+    assertEqual(reportFor('https://example.com/uk/news', false).detail, 'uk/news');
+});
+
+test('rules: regional forms of a locale share one row', () => {
+    assertEqual(reportFor('https://example.com/fr-FR/docs', false).detail, 'fr/docs');
+    assertEqual(reportFor('https://example.com/fr/docs', false).detail, 'fr/docs');
+    assertEqual(reportFor('https://example.com/zh-Hans/docs', false).detail, 'zh/docs');
+    assertEqual(reportFor('https://example.com/es-419/docs', false).detail, 'es/docs');
+    assertEqual(reportFor('https://example.com/en_us/docs', false).detail, 'en/docs');
+    assertEqual(reportFor('https://example.com/EN/docs', false).detail, 'en/docs');
+    assertEqual(reportFor('https://example.com/uk-UA/docs', false).detail, 'uk/docs');
+});
+
+test('rules: after a locale, prefixes and dates are handled as at the front', () => {
+    assertEqual(reportFor('https://example.com/en/t/topic', false).detail, 'en/t/topic');
+    assertEqual(reportFor('https://www.apple.com/en/nz/iphone', false).detail, 'en/nz/iphone');
+    assertEqual(reportFor('https://example.com/en/2026/09/21/post', false).detail, 'en/post');
+});
+
+test('rules: a locale with nothing meaningful after it reports what there is', () => {
+    assertEqual(reportFor('https://example.com/en-US', false).detail, 'en');
+    assertEqual(reportFor('https://example.com/en-US/2026', false).detail, 'en/2026');
+});
+
+test('rules: stacked locales and prefixes are capped at three segments', () => {
+    assertEqual(reportFor('https://example.com/en/fr/de/it/x', false).detail, 'en/fr/de');
+});
+
+test('rules: a hyphenated word that merely looks like a locale is kept whole', () => {
+    assertEqual(reportFor('https://example.com/my-app/settings', false).detail, 'my-app');
+    assertEqual(reportFor('https://example.com/go-home/x', false).detail, 'go-home');
 });

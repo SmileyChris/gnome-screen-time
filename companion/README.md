@@ -20,17 +20,24 @@ generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`
   - the project key on `*.atlassian.net`, from `/browse/KEY-1` or
     `/jira/<product>/projects/KEY/...`
   - the team prefix of an issue on linear.app (`/acme/issue/ENG-12` -> `ENG`)
-  - the first path segment on every other host, and on any host above whose
-    path does not match its rule, after skipping a leading run of date
-    segments (`/2026/09/21/technology/...` -> `technology`) and a locale
-    prefix (`/en-US/docs/...` -> `docs`). A path with nothing else in it
-    reports the skipped run whole, up to three segments
-    (`/2026/09/21` -> `2026/09/21`), so a path always reports something.
-    A single-character segment is a routing prefix and keeps the next segment
-    with it, which is how reddit gets `r/<sub>` with no rule of its own
-    (`/c/Veritasium` -> `c/Veritasium`, `/t/<topic>` -> `t/<topic>`).
-    Host rules above read their segments raw, so a two-letter repo owner and
-    an article named for a year survive.
+  - on every other host, and on any host above whose path does not match
+    its rule, the first path segment, shaped by three adjustments:
+    - a leading run of dates is skipped
+      (`/2026/09/21/technology/...` -> `technology`); a path of nothing but
+      dates reports them whole (`/2026/09/21`);
+    - a locale is kept as its language and the rest of the path is read the
+      same way after it, so regional forms share one row
+      (`/en-US/docs/...` and `/en/docs/...` -> `en/docs`). A locale is one
+      of a fixed list of common language codes, optionally with a country,
+      script or region (`ja`, `pt-BR`, `zh-Hans`, `es-419`);
+    - any other segment of one or two characters is a routing prefix and
+      takes exactly one segment with it: `/r/<sub>` -> `r/<sub>` (reddit
+      needs no rule of its own), `/nz/iphone` -> `nz/iphone`,
+      `/dp/<ASIN>` -> `dp/<ASIN>`.
+
+    A default detail is at most three segments. Host rules above read their
+    segments raw, so a two-letter repo owner and an article named for a year
+    survive.
 
   Segments are URL-decoded and cut at 64 characters.
 
