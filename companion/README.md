@@ -11,9 +11,24 @@ generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`
 
 - `browser`: `brave`, `chrome`, `firefox` or `zen`, a build-time constant.
 - `host`: hostname, lowercased, one leading `www.` removed.
-- `detail`: `owner/repo` on github.com, gitlab.com, codeberg.org and
-  bitbucket.org; `r/<sub>` on reddit.com and old.reddit.com; the first path
-  segment elsewhere. Segments are URL-decoded and cut at 64 characters.
+- `detail`: the site unit, taken from the path only:
+  - `owner/repo` on github.com, gitlab.com, codeberg.org, bitbucket.org,
+    git.sr.ht and gitea.com
+  - `r/<sub>` on reddit.com and old.reddit.com
+  - the article on `*.wikipedia.org`, `*.wiktionary.org`, `*.wikiquote.org`
+  - the package on npmjs.com, pypi.org, crates.io and rubygems.org; a scoped
+    npm package keeps its scope (`@babel/core`)
+  - the project key on `*.atlassian.net`, from `/browse/KEY-1` or
+    `/jira/<product>/projects/KEY/...`
+  - the team prefix of an issue on linear.app (`/acme/issue/ENG-12` -> `ENG`)
+  - the first path segment on every other host, and on any host above whose
+    path does not match its rule, after skipping a leading run of date
+    segments (`/2026/09/21/technology/...` -> `technology`) and a locale
+    prefix (`/en-US/docs/...` -> `docs`). The last segment is never skipped,
+    so a path always reports something. Host rules above read their segments
+    raw, so a two-letter repo owner and an article named for a year survive.
+
+  Segments are URL-decoded and cut at 64 characters.
 
 Private windows and non-web schemes send empty strings. An unfocused browser still sends its site with `focused: false`; the Shell shows it in preferences but credits time only while focused.
 The URL, title, query string and fragment never leave the browser.
