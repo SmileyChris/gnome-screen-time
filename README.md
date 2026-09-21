@@ -14,6 +14,7 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 - **App time limits:** set a daily limit per app and get a desktop notification once you cross it.
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
 - **Presence-aware:** time on the lock screen, while the screen is blanked, or while suspended is never counted.
+- **Idle detection:** counting stops after 10 minutes without keyboard or mouse input, unless something is inhibiting idle the way a playing video does.
 - **Local only:** a plain JSON file on your disk. No network access, no telemetry.
 
 ## Requirements
@@ -53,6 +54,8 @@ gnome-extensions prefs screen-time@gnome-screen-time
 |---|---|---|
 | Show total time in panel | On | Off shows only the icon. |
 | Max interval | 600s | Caps any single tracked stretch, so a stall can't dump hours onto one app. |
+| Idle timeout | 10 min | Stop counting after this long without input. `0` disables idle detection. |
+| Day starts at | 0 (midnight) | Hour a new day begins, so work past midnight can stay on the day it started. |
 | App time limits | none | Per-app daily limit in minutes; notifies once per day when crossed. |
 | Retention days | 90 | How long history is kept. `0` keeps it forever. |
 
