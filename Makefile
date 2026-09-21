@@ -155,9 +155,10 @@ companion-uninstall:
 # typelibs are expected outside a live Shell, so only SyntaxError counts.
 # stdin comes from /dev/null because this runs each module: the native
 # messaging host reads stdin until it closes, and would otherwise block here.
+# src/timesheet.js is skipped: running it would open the Timesheet window.
 check:
 	@fail=0; \
-	for f in $(wildcard $(SRC_DIR)/*.js) $(wildcard companion/webext/*.js) $(wildcard companion/host/*.js); do \
+	for f in $(filter-out $(SRC_DIR)/timesheet.js,$(wildcard $(SRC_DIR)/*.js)) $(wildcard companion/webext/*.js) $(wildcard companion/host/*.js); do \
 		if gjs -m "$$f" < /dev/null 2>&1 | grep -qi "SyntaxError"; then \
 			echo "SyntaxError in $$f"; fail=1; \
 		fi; \

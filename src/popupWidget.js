@@ -1,10 +1,13 @@
 import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import { formatTime } from './formatTime.js';
-import { todayKey, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
+import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
+import { ClockSection } from './clockSection.js';
+import { isKnownClient, pausedClient } from './clients.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow } from './usageRows.js';
 
@@ -33,10 +36,20 @@ function tierFor(seconds) {
     return USAGE_TIERS.find(t => seconds < t.limit) ?? USAGE_TIERS.at(-1);
 }
 
+// The clock card's colour says whether the clock is running: purple
+// while one is (no usage tier is purple), neutral gray otherwise. Each
+// lightens on hover, like the usage tiers.
+const CLOCK_RUNNING = {from: '#dc8add', to: '#c061cb', hoverFrom: '#ebb6ea', hoverTo: '#dc8add'};
+const CLOCK_STOPPED = {from: '#deddda', to: '#c0bfbc', hoverFrom: '#f6f5f4', hoverTo: '#deddda'};
+
+// Both cards stack the same two lines, so their rows line up.
+const TITLE_STYLE = 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';';
+const FIGURE_STYLE = 'font-size: 17px; font-weight: 800; color: ' + CARD_FG + ';';
+
 function cardStyle(tier, hover) {
     let from = hover ? tier.hoverFrom : tier.from;
     let to = hover ? tier.hoverTo : tier.to;
-    return 'margin: 4px 10px 2px 10px; padding: 10px 14px; border-radius: 14px; ' +
+    return 'padding: 10px 12px; border-radius: 14px; ' +
            'background-gradient-direction: vertical; ' +
            'background-gradient-start: ' + from + '; ' +
            'background-gradient-end: ' + to + ';';
@@ -51,8 +64,8 @@ function shiftKey(key, days) {
     return dateKey(keyToDate(key).add_days(days));
 }
 
-function labelForKey(key) {
-    let today = todayKey();
+function labelForKey(key, startHour) {
+    let today = todayKey(startHour);
     if (key === today)
         return 'Today';
     if (key === shiftKey(today, -1))
@@ -61,13 +74,23 @@ function labelForKey(key) {
 }
 
 export class PopupWidget {
-    constructor(menu, store, settings, openPrefs) {
+    constructor(menu, store, settings, openPrefs, clock, onOpenTimesheet) {
         this._menu = menu;
         this._store = store;
         this._settings = settings;
         this._openPrefs = openPrefs;
-        this._date = todayKey();
+        // Stored, not just passed through: the footer button and the split
+        // card (later tasks) both read these back off `this`.
+        this._clock = clock;
+        this._onOpenTimesheet = onOpenTimesheet;
+        this._date = todayKeyFor(settings);
         this._timerSection = new AppTimerSection(store, settings);
+        // The client list's "Add client…" row opens Preferences, the same
+        // way the footer's gear button does.
+        this._clockSection = new ClockSection(clock, settings, () => {
+            this._menu.close();
+            this._openPrefs?.();
+        });
         // Paths (joined with \0) whose rows are expanded, so a rebuild after
         // an edit lands where the user was. Cleared on reopen and date change.
         this._expanded = new Set();
@@ -80,8 +103,14 @@ export class PopupWidget {
         });
     }
 
+    // The shortcut and the panel can change the clock without the popup being
+    // open; this is how they ask it to redraw.
+    refresh() {
+        this._build();
+    }
+
     _refresh() {
-        this._date = todayKey();
+        this._date = todayKeyFor(this._settings);
         this._expanded.clear();
         this._timerSection.reset();
         this._build();
@@ -92,8 +121,8 @@ export class PopupWidget {
     _earliestKey() {
         let retention = this._settings.get_int('retention-days');
         if (retention > 0)
-            return shiftKey(todayKey(), -retention);
-        return this._store.getOldestDate() ?? todayKey();
+            return shiftKey(todayKeyFor(this._settings), -retention);
+        return this._store.getOldestDate() ?? todayKeyFor(this._settings);
     }
 
     _build() {
@@ -129,6 +158,13 @@ export class PopupWidget {
         }
 
         this._addSeparator();
+        // The clock rows are a live control showing today's hours, so they sit
+        // under today's breakdown only; paging back to an earlier day hides them
+        // rather than mixing two days under one date heading.
+        if (this._date === todayKeyFor(this._settings)) {
+            this._clockSection.build(this._menu, () => this._build());
+            this._addSeparator();
+        }
         this._timerSection.build(this._menu, () => this._build());
         if (this._timerSection.isOpen)
             this._addSeparator();
@@ -164,7 +200,7 @@ export class PopupWidget {
         });
 
         let canPrev = this._date > this._earliestKey();
-        let canNext = this._date < todayKey();
+        let canNext = this._date < todayKeyFor(this._settings);
 
         row.add_child(this._navButton('go-previous-symbolic', canPrev, () => {
             this._date = shiftKey(this._date, -1);
@@ -173,7 +209,7 @@ export class PopupWidget {
         }));
 
         row.add_child(new St.Label({
-            text: labelForKey(this._date),
+            text: labelForKey(this._date, this._settings.get_int('day-start-hour')),
             x_expand: true,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
@@ -208,47 +244,214 @@ export class PopupWidget {
         item.track_hover = false;
         item.style = 'padding: 0;';
 
+        // Two cards side by side, kept the same width whatever each holds.
+        let cards = new St.Widget({
+            x_expand: true,
+            layout_manager: new Clutter.BoxLayout({homogeneous: true, spacing: 8}),
+            style: 'margin: 4px 10px 2px 10px;',
+        });
+
+        // Left card: screen time, and the existing tap-to-flip-bars target.
         let tier = tierFor(total);
-        let card = new St.BoxLayout({
+        let screen = new St.BoxLayout({
+            vertical: true,
             x_expand: true,
             reactive: true,
             track_hover: true,
             style_class: 'screen-time-card',
             style: cardStyle(tier, false),
         });
-
-        let titles = new St.BoxLayout({ vertical: true, y_align: Clutter.ActorAlign.CENTER });
-        titles.add_child(new St.Label({
-            text: 'Total Screen Time',
-            style: 'font-size: 12px; font-weight: 600; color: ' + CARD_FG + ';',
-        }));
-        titles.add_child(new St.Label({
-            text: this._percentBasis() === 'largest' ? 'bars: of largest' : 'bars: of total',
-            opacity: DIM_OPACITY,
-            style: 'font-size: 9px; color: ' + CARD_FG + ';',
-        }));
-        card.add_child(titles);
-        card.add_child(new St.BoxLayout({x_expand: true}));
-        card.add_child(new St.Label({
+        screen.add_child(new St.Label({text: 'Screen Time', style: TITLE_STYLE}));
+        screen.add_child(new St.Label({
             text: total > 0 ? formatTime(total) : '0m',
-            y_align: Clutter.ActorAlign.CENTER,
-            style: 'font-size: 17px; font-weight: 800; color: ' + CARD_FG + ';',
+            style: FIGURE_STYLE,
         }));
-
         // The gradient is per-usage and therefore inline, which outranks any
         // stylesheet :hover rule, so the hover swap is done here instead.
-        card.connect('notify::hover', () => {
-            card.style = cardStyle(tier, card.hover);
+        screen.connect('notify::hover', () => {
+            screen.style = cardStyle(tier, screen.hover);
         });
-        // Clicking the card flips what the row percentages compare against.
-        card.connect('button-release-event', () => {
+        // Clicking it flips what the row percentages compare against.
+        screen.connect('button-release-event', () => {
             this._settings.set_string('percent-basis',
                 this._percentBasis() === 'largest' ? 'total' : 'largest');
             this._build();
             return Clutter.EVENT_STOP;
         });
+        cards.add_child(screen);
 
-        item.add_child(card);
+        // Right card: the clock, reflecting the day on screen rather than
+        // always today. The clock rows section hides itself on any day but
+        // today for the same reason (a live control mixed with another
+        // day's numbers is misleading) - see _build()'s call to
+        // _clockSection.build().
+        //
+        // Running: the client and its own time today, with a pause button.
+        // Paused (no session, but last-client names a client to resume):
+        // the same, with stop and play buttons. Stopped, or any earlier day:
+        // the day's clocked total, no buttons. Stop forgets last-client, so
+        // nothing can resume it and the panel stops showing a total (see
+        // panelMode.js). Tapping the card itself pauses or resumes, like
+        // the pause and play buttons; on a total above zero, it opens the
+        // Timesheet at that day.
+        let isToday = this._date === todayKeyFor(this._settings);
+        let running = isToday ? (this._clock?.running ?? null) : null;
+        // See clients.js's pausedClient for exactly when that is.
+        let resumable = isToday && this._clock ? pausedClient(this._settings, running) : null;
+        let paused = resumable !== null;
+        let client = running?.client ?? resumable;
+        let canToggle = client !== null;
+        // Same rules as the clock rows below and the day total, so the card
+        // can never disagree with either.
+        let figure = !this._clock ? 0
+            : client !== null ? this._clock.billedSecondsByClient(this._date).get(client) ?? 0
+            : this._clock.billedSecondsForDay(this._date);
+        // Nothing to pause or resume, so the card is just the day's total:
+        // tapping it opens the Timesheet at that day, where the total is
+        // broken down. A zero total has nothing to show, so it stays inert.
+        let opensTimesheet = !canToggle && figure > 0;
+        let tappable = canToggle || opensTimesheet;
+        let clockTier = running ? CLOCK_RUNNING : CLOCK_STOPPED;
+        let clock = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            reactive: tappable,
+            track_hover: tappable,
+            style_class: 'screen-time-card',
+            style: cardStyle(clockTier, false),
+        });
+
+        // Client names are free-form and unbounded, unlike every other
+        // label on these cards - a long one must not widen this card, and
+        // with it (the cards share one width) the popup, past ROW_W. Capped
+        // to what half of ROW_W leaves after the cards' padding and gap;
+        // the full name stays visible in the clock rows below
+        // (ClockSection), which ellipsize the same way. The buttons share
+        // that width, so each takes its own share off the cap.
+        let titleRow = new St.BoxLayout({style: 'spacing: 2px;'});
+        let title = new St.Label({
+            text: client ?? (isToday ? 'Clocked today' : 'Clocked'),
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+        titleRow.add_child(title);
+
+        // Pause and play both re-derive the state at tap time rather than
+        // closing over `running`: the panel/shortcut can change the clock
+        // while the popup is still open (see ClockSection.build()).
+        // Resuming from the card (a tap on it, or its play button) is done
+        // with the popup, so it closes. Pausing leaves it open to show the
+        // paused state, and so does a failed resume.
+        let toggle = () => {
+            let resumed = false;
+            try {
+                let last = this._settings.get_string('last-client');
+                if (this._clock.running) {
+                    this._clock.stop();
+                } else if (isKnownClient(this._settings, last)) {
+                    this._clock.start(last);
+                    resumed = true;
+                }
+            } catch (e) {
+                // start()/stop() throw when the system clock is out of
+                // range; the popup has no toast, so log and let the
+                // rebuild show whatever state actually landed.
+                console.error(`[ScreenTime] clock toggle failed: ${e.message}`);
+            } finally {
+                this._build();
+                if (resumed)
+                    this._menu.close();
+            }
+        };
+        let stop = () => {
+            try {
+                if (this._clock.running)
+                    this._clock.stop();
+                // Only once stop() has not thrown: a failed stop leaves the
+                // session running, and it stays resumable.
+                this._settings.set_string('last-client', '');
+            } catch (e) {
+                console.error(`[ScreenTime] clock stop failed: ${e.message}`);
+            } finally {
+                this._build();
+            }
+        };
+        let cardButton = (iconName, name, onClick) => {
+            let btn = new St.Button({
+                child: new St.Icon({
+                    icon_name: iconName,
+                    icon_size: 12,
+                    style: `color: ${CARD_FG};`,
+                }),
+                can_focus: true,
+                accessible_name: name,
+                y_align: Clutter.ActorAlign.CENTER,
+                style_class: 'screen-time-card-button',
+            });
+            btn.connect('clicked', onClick);
+            return btn;
+        };
+        let buttons = running
+            ? [cardButton('media-playback-pause-symbolic', 'Pause', toggle)]
+            : paused
+                ? [cardButton('media-playback-stop-symbolic', 'Stop', stop),
+                    cardButton('media-playback-start-symbolic', 'Play', toggle)]
+                : [];
+        for (let btn of buttons)
+            titleRow.add_child(btn);
+        title.style = TITLE_STYLE +
+            ` max-width: ${Math.round(ROW_W / 2) - 36 - 20 * buttons.length}px;`;
+        clock.add_child(titleRow);
+
+        // The figure is the client's time today, while the panel shows the
+        // running session's own time. Once the client has two or more
+        // sessions today the two differ, so a small count after the figure
+        // says why. Capped like the title, so it can never widen the card:
+        // the count ellipsizes before the figure gives up any room.
+        let figureRow = new St.BoxLayout({
+            style: `spacing: 5px; max-width: ${Math.round(ROW_W / 2) - 36}px;`,
+        });
+        figureRow.add_child(new St.Label({
+            text: figure > 0 ? formatTime(figure) : '0m',
+            style: FIGURE_STYLE,
+        }));
+        let sessionCount = client !== null && this._clock
+            ? this._clock.sessionsForDay(this._date).filter(s => s.client === client).length
+            : 0;
+        if (sessionCount >= 2) {
+            let count = new St.Label({
+                text: `${sessionCount} sessions`,
+                opacity: DIM_OPACITY,
+                y_align: Clutter.ActorAlign.END,
+                style: `font-size: 10px; padding-bottom: 3px; color: ${CARD_FG};`,
+            });
+            count.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+            figureRow.add_child(count);
+        }
+        clock.add_child(figureRow);
+
+        if (tappable) {
+            // Same inline-gradient hover swap as the screen time card.
+            clock.connect('notify::hover', () => {
+                clock.style = cardStyle(clockTier, clock.hover);
+            });
+            clock.connect('button-release-event', () => {
+                if (opensTimesheet) {
+                    this._menu.close();
+                    this._onOpenTimesheet?.(this._date);
+                } else if (!buttons.some(btn => btn.hover)) {
+                    // A release over a button is that button's click, not a
+                    // tap on the card around it.
+                    toggle();
+                }
+                return Clutter.EVENT_STOP;
+            });
+        }
+
+        cards.add_child(clock);
+
+        item.add_child(cards);
         this._menu.addMenuItem(item);
     }
 
@@ -302,9 +505,9 @@ export class PopupWidget {
         // children (see UsageStore.addTime), but direct time has no entry
         // of its own: a terminal pane with no zellij session, or the
         // interval before the source resolves, is credited to the parent
-        // only. Surface the gap as an unlabeled leaf so the visible rows
-        // still sum to the parent's total. At zero it stays hidden until a
-        // long press on the parent reveals it, so direct time can be added.
+        // only. Surface the gap as an "Unattributed" leaf so the visible
+        // rows still sum to the parent's total. At zero it stays hidden until
+        // a long press on the parent reveals it, so direct time can be added.
         if (depth > 0) {
             let row = this._addLeaf({
                 name: 'Unattributed',
@@ -410,6 +613,28 @@ export class PopupWidget {
             });
             row.add_child(undo);
         }
+        let timesheetBox = new St.BoxLayout();
+        timesheetBox.add_child(new St.Icon({
+            icon_name: 'x-office-spreadsheet-symbolic',
+            icon_size: 14,
+        }));
+        timesheetBox.add_child(new St.Label({
+            text: 'Timesheet',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 11px; padding-left: 4px;',
+        }));
+        let timesheetButton = new St.Button({
+            child: timesheetBox,
+            style_class: 'screen-time-nav-button',
+            can_focus: true,
+            style: 'margin-left: 8px;',
+        });
+        timesheetButton.connect('clicked', () => {
+            this._menu.close();
+            this._onOpenTimesheet?.();
+        });
+        row.add_child(timesheetButton);
+
         row.add_child(new St.BoxLayout({x_expand: true}));   // pushes the settings button right
 
         let btn = new St.Button({
@@ -435,10 +660,14 @@ export class PopupWidget {
             this._menu.disconnect(this._openId);
             this._openId = null;
         }
+        this._clockSection?.destroy();
+        this._clockSection = null;
         this._menu = null;
         this._store = null;
         this._settings = null;
         this._openPrefs = null;
+        this._clock = null;
+        this._onOpenTimesheet = null;
         this._timerSection = null;
     }
 }
