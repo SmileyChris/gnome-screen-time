@@ -37,29 +37,18 @@ build: schemas
 # src/ means a new module never has to be registered anywhere. If it is in
 # src/, it ships.
 #
-# The new copy is built outside the extensions directory and swapped in with
-# mv, never copied over the files already there. A running Shell keeps
+# The old copy is deleted first, never copied over. A running Shell keeps
 # schemas/gschemas.compiled memory-mapped; rewriting those bytes under the
 # same inode changes what the live mapping reads, and a GSettings lookup that
-# then fails takes the session down with it. Renaming leaves the old inode
-# intact for anything still holding it.
+# then fails takes the session down with it. Unlinking leaves the old inode
+# alive for anything still mapping it. This replaces the directory wholesale,
+# so files dropped from src/ are cleaned out rather than left behind. The
+# trailing slash is stripped because `rm -rf link/` empties a symlinked
+# install's target instead of removing the link.
 install: build
-	@set -e; \
-	ext='$(EXTENSION_DIR)'; \
-	if [ -z "$$ext" ]; then echo "install: EXTENSION_DIR must not be empty" >&2; exit 1; fi; \
-	root=$$(dirname "$$(dirname "$$ext")"); \
-	stage="$$root/.$(UUID).staging"; old="$$root/.$(UUID).old"; \
-	if [ ! -e "$$ext" ] && [ -e "$$old" ]; then mv "$$old" "$$ext"; fi; \
-	rm -rf "$$old" "$$stage"; \
-	mkdir -p "$$(dirname "$$ext")"; \
-	cp -r "$(SRC_DIR)" "$$stage"; \
-	if [ -e "$$ext" ]; then mv "$$ext" "$$old"; fi; \
-	if ! mv "$$stage" "$$ext"; then \
-		if [ -e "$$old" ]; then mv "$$old" "$$ext"; fi; \
-		echo "install: FAILED to activate new copy at $$ext; rolled back to the previous install" >&2; \
-		exit 1; \
-	fi; \
-	rm -rf "$$old"; \
+	@ext='$(EXTENSION_DIR)'; ext=$${ext%/}; \
+	[ -n "$$ext" ] || { echo "install: EXTENSION_DIR must not be empty" >&2; exit 1; }; \
+	rm -rf "$$ext" && mkdir -p "$$ext" && cp -r "$(SRC_DIR)"/* "$$ext"/ && \
 	echo "Installed to $$ext"
 	@# A dev copy from `make reload` would otherwise stay enabled across
 	@# logins with the production copy switched off; installing means we
