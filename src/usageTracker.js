@@ -35,6 +35,15 @@ export class UsageTracker {
         // resolve that started against an older state is dropped on return.
         this._resolveSeq = 0;
 
+        // A push source (browser companion) changed state. Re-credit only
+        // when that source is the one describing the focused window;
+        // otherwise a tab change in an unfocused browser would re-resolve a
+        // focused terminal and spawn zellij on every report.
+        this._sources.onChange = source => {
+            if (this._path && source.claims(this._path[0]))
+                this._refresh();
+        };
+
         // screenShield only exists when GNOME can lock at all (GDM + systemd),
         // so presence detection treats it as optional; max-interval is the backstop.
         this._shield = Main.screenShield ?? null;
@@ -221,8 +230,8 @@ export class UsageTracker {
     // Credits elapsed time (since _lastTime) to whatever path is currently
     // tracked and advances the clock. The store keeps whole seconds, so the
     // fraction it rounds away is left on the clock instead of being dropped:
-    // short flushes (quick focus or pane changes) then neither lose time nor
-    // inflate it.
+    // sub-second flushes (a browser reporting rapid tab changes) then neither
+    // lose time nor inflate it.
     _flush(now) {
         let elapsed = (now - this._lastTime) / 1000;
         let secs = Math.min(elapsed, this._getMaxInterval());
@@ -332,7 +341,7 @@ export class UsageTracker {
     }
 
     // Banks the interval so far and asks the sources again. Used by the 30s
-    // tick.
+    // tick and by a source announcing a change.
     _refresh() {
         if (this._away || !this._path)
             return;
@@ -377,6 +386,7 @@ export class UsageTracker {
         this._cancellable.cancel();
         this._flush(Date.now());
         this._resolveSeq++;   // drop any resolve still in flight
+        this._sources.onChange = null;
         this._sources.destroy();
         this._sources = null;
         this._win = null;

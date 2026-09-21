@@ -2,6 +2,7 @@ import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import Adw from 'gi://Adw';
 import GLib from 'gi://GLib';
+import GioUnix from 'gi://GioUnix';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
@@ -189,6 +190,8 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT);
         intervalGroup.add(dayStartRow);
 
+        this._addCompanionsGroup(page, window);
+
         this._addLimitsGroup(page, settings, data);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
@@ -242,6 +245,157 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         }));
 
         window.set_focus(null);
+    }
+
+    // Live status of the browser companions, read from the running Shell
+    // extension over D-Bus and refreshed while the window is open. Only
+    // browsers that are installed here or currently connected get a row; a
+    // not-connected one expands into the install steps for that browser.
+    _addCompanionsGroup(page, window) {
+        const BROWSERS = {
+            brave: {
+                name: 'Brave', appId: 'brave-browser.desktop',
+                hostsDir: '.config/BraveSoftware/Brave-Browser/NativeMessagingHosts',
+                steps: dist => `Open brave://extensions, turn on Developer mode, choose Load unpacked and pick ${dist}/webext-brave.`,
+            },
+            chrome: {
+                name: 'Google Chrome', appId: 'google-chrome.desktop',
+                hostsDir: '.config/google-chrome/NativeMessagingHosts',
+                steps: dist => `Open chrome://extensions, turn on Developer mode, choose Load unpacked and pick ${dist}/webext-chrome.`,
+            },
+            firefox: {
+                name: 'Firefox', appId: 'firefox.desktop',
+                hostsDir: '.mozilla/native-messaging-hosts',
+                steps: dist => `Open about:debugging#/runtime/this-firefox, choose Load Temporary Add-on and pick ${dist}/webext-firefox/manifest.json (or install ${dist}/screen-time-firefox.xpi in a build that allows unsigned add-ons).`,
+            },
+            zen: {
+                name: 'Zen Browser', appId: 'zen.desktop',
+                hostsDir: '.mozilla/native-messaging-hosts',
+                steps: dist => `Open about:debugging#/runtime/this-firefox, choose Load Temporary Add-on and pick ${dist}/webext-zen/manifest.json (or install ${dist}/screen-time-zen.xpi with xpinstall.signatures.required set to false).`,
+            },
+        };
+        const HOST_MANIFEST = 'org.gnome.shell.extensions.screen_time.json';
+
+        const group = new Adw.PreferencesGroup({
+            title: 'Browser Companions',
+            description: 'Break browser time down by site with the companion extension.',
+        });
+        page.add(group);
+
+        const installed = id => GioUnix.DesktopAppInfo.new(BROWSERS[id].appId) !== null;
+
+        // The host manifest doubles as the pointer to the checkout, which is
+        // where the built extension directories live.
+        const setupText = id => {
+            const file = Gio.File.new_for_path(GLib.build_filenamev(
+                [GLib.get_home_dir(), BROWSERS[id].hostsDir, HOST_MANIFEST]));
+            let hostPath = null;
+            try {
+                const [, bytes] = file.load_contents(null);
+                hostPath = JSON.parse(new TextDecoder().decode(bytes)).path;
+            } catch (e) {
+                return 'Run make companion-install in the gnome-screen-time checkout first.';
+            }
+            const repo = GLib.path_get_dirname(GLib.path_get_dirname(GLib.path_get_dirname(hostPath)));
+            return BROWSERS[id].steps(GLib.build_filenamev([repo, 'dist']));
+        };
+
+        // Connected browsers get their own row. Everything installed but not
+        // connected shares one collapsed expander so the group stays short.
+        const connectedRows = new Map();   // id -> Adw.ActionRow
+        let setupRow = null;               // Adw.ExpanderRow
+        let setupIds = '';                 // ids currently inside it, for cheap diffing
+        let emptyRow = null;
+
+        const syncConnected = (id, subtitle) => {
+            let row = connectedRows.get(id);
+            if (!row) {
+                row = new Adw.ActionRow({title: BROWSERS[id].name});
+                group.add(row);
+                connectedRows.set(id, row);
+            }
+            row.subtitle = subtitle;
+        };
+        const syncSetup = ids => {
+            const key = ids.join(',');
+            if (key === setupIds)
+                return;
+            setupIds = key;
+            if (setupRow) {
+                group.remove(setupRow);
+                setupRow = null;
+            }
+            if (ids.length === 0)
+                return;
+            setupRow = new Adw.ExpanderRow({
+                title: 'Not connected',
+                subtitle: ids.map(id => BROWSERS[id].name).join(', '),
+            });
+            for (const id of ids) {
+                const body = new Adw.ActionRow({title: BROWSERS[id].name, subtitle: setupText(id)});
+                body.subtitle_lines = 0;
+                setupRow.add_row(body);
+            }
+            group.add(setupRow);
+        };
+
+        const render = list => {
+            const connected = new Set();
+            const notConnected = [];
+            for (const [id, host, isConnected, focused] of list) {
+                if (!BROWSERS[id] || !(isConnected || installed(id)))
+                    continue;
+                if (!isConnected) {
+                    notConnected.push(id);
+                    continue;
+                }
+                connected.add(id);
+                if (!host)
+                    syncConnected(id, 'Connected, no web page in the active tab');
+                else
+                    syncConnected(id, focused ? `Connected, on ${host}` : `Connected, on ${host} (window not focused)`);
+            }
+            for (const id of [...connectedRows.keys()]) {
+                if (!connected.has(id)) {
+                    group.remove(connectedRows.get(id));
+                    connectedRows.delete(id);
+                }
+            }
+            syncSetup(notConnected);
+            const any = connected.size + notConnected.length > 0;
+            if (!any && !emptyRow) {
+                emptyRow = new Adw.ActionRow({title: 'No supported browser found', subtitle: 'Brave, Google Chrome, Firefox and Zen are supported.'});
+                group.add(emptyRow);
+            } else if (any && emptyRow) {
+                group.remove(emptyRow);
+                emptyRow = null;
+            }
+        };
+
+        const refresh = () => {
+            Gio.DBus.session.call(
+                'org.gnome.Shell', '/org/gnome/Shell/Extensions/ScreenTime',
+                'org.gnome.Shell.Extensions.ScreenTime', 'GetCompanions',
+                null, new GLib.VariantType('(a(ssbb))'), Gio.DBusCallFlags.NONE, 1000, null,
+                (conn, res) => {
+                    try {
+                        const [list] = conn.call_finish(res).deepUnpack();
+                        render(list);
+                    } catch (e) {
+                        // Extension not running: show installed browsers as not connected.
+                        render(Object.keys(BROWSERS).map(id => [id, '', false, false]));
+                    }
+                });
+        };
+        refresh();
+        const timer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+            refresh();
+            return GLib.SOURCE_CONTINUE;
+        });
+        window.connect('close-request', () => {
+            GLib.source_remove(timer);
+            return false;
+        });
     }
 
     _addLimitsGroup(page, settings, data) {

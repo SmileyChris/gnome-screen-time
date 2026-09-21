@@ -1,0 +1,7 @@
+{
+    "name": "org.gnome.shell.extensions.screen_time",
+    "description": "GNOME Screen Time browser companion host",
+    "path": "@PATH@",
+    "type": "stdio",
+    "allowed_origins": ["chrome-extension://@ID@/"]
+}

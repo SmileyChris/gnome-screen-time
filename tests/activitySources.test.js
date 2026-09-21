@@ -194,3 +194,27 @@ test('registry: passes the app id to the source', async () => {
     await reg.resolve({}, 'term.desktop');
     assertEqual(seen, 'term.desktop');
 });
+
+test('registry: a source change drops the debounce cache and fans out', async () => {
+    let src = new FakeSource(SUB);
+    src.onChange = null;
+    let reg = new ActivitySourceRegistry([src]);
+    let fired = 0;
+    reg.onChange = () => fired++;
+    let win = {};
+    await reg.resolve(win, 'term.desktop', 1000);
+    src.onChange('term');
+    assertEqual(fired, 1);
+    await reg.resolve(win, 'term.desktop', 1001);
+    assertEqual(src.calls, 2, 'resolved again despite the debounce window');
+});
+
+test('registry: onChange receives the source that changed', async () => {
+    let src = new FakeSource(SUB);
+    src.onChange = null;
+    let reg = new ActivitySourceRegistry([src]);
+    let seen = null;
+    reg.onChange = s => { seen = s; };
+    src.onChange('term');
+    assertEqual(seen === src, true);
+});
