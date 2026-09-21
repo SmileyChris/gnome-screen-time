@@ -29,6 +29,8 @@ test('rules: reddit takes r/<sub>, else first segment', () => {
     assertEqual(reportFor('https://old.reddit.com/r/linux', false).detail, 'r/linux');
     assertEqual(reportFor('https://reddit.com/user/someone', false).detail, 'user');
     assertEqual(reportFor('https://reddit.com/r/', false).detail, 'r');
+    assertEqual(reportFor('https://reddit.com/r/de', false).detail, 'r/de', 'locale-shaped sub kept');
+    assertEqual(reportFor('https://new.reddit.com/r/gnome', false).detail, 'r/gnome');
 });
 
 test('rules: everything else takes the first path segment', () => {
@@ -72,8 +74,8 @@ test('rules: wiki hosts take the article, any language subdomain', () => {
     assertEqual(reportFor('https://en.wikiquote.org/wiki/Ada_Lovelace', false).detail, 'Ada_Lovelace');
 });
 
-test('rules: a wiki host off the article path falls back to the first segment', () => {
-    assertEqual(reportFor('https://en.wikipedia.org/w/index.php', false).detail, 'w');
+test('rules: a wiki host off the article path falls back to the default rule', () => {
+    assertEqual(reportFor('https://en.wikipedia.org/w/index.php', false).detail, 'w/index.php');
     assertEqual(reportFor('https://en.wikipedia.org/wiki/', false).detail, 'wiki');
     assertEqual(reportFor('https://en.wikipedia.org/', false).detail, '');
 });
@@ -145,10 +147,16 @@ test('rules: a leading locale segment is skipped', () => {
     assertEqual(reportFor('https://example.com/pt-BR/help/x', false).detail, 'help');
 });
 
-test('rules: the last segment is never skipped, so a path always reports something', () => {
+test('rules: a path of nothing but skippable segments reports them whole', () => {
+    assertEqual(reportFor('https://example.com/2026/09/21', false).detail, '2026/09/21');
+    assertEqual(reportFor('https://example.com/2026/09', false).detail, '2026/09');
     assertEqual(reportFor('https://example.com/2026', false).detail, '2026');
-    assertEqual(reportFor('https://example.com/2026/09/21', false).detail, '21');
     assertEqual(reportFor('https://example.com/en-US', false).detail, 'en-US');
+    assertEqual(reportFor('https://example.com/en-US/2026', false).detail, 'en-US/2026');
+});
+
+test('rules: a wholly skippable path is capped so it cannot become a huge key', () => {
+    assertEqual(reportFor('https://example.com/1/2/3/4/5/6', false).detail, '1/2/3');
 });
 
 test('rules: skipping does not apply to hosts with their own rule', () => {
@@ -156,4 +164,21 @@ test('rules: skipping does not apply to hosts with their own rule', () => {
     assertEqual(reportFor('https://en.wikipedia.org/wiki/2026', false).detail, '2026');
     assertEqual(reportFor('https://npmjs.com/package/left-pad', false).detail, 'left-pad');
     assertEqual(reportFor('https://reddit.com/r/gnome', false).detail, 'r/gnome');
+});
+
+test('rules: a single-character prefix takes the next segment with it', () => {
+    assertEqual(reportFor('https://youtube.com/c/Veritasium/videos', false),
+        { host: 'youtube.com', detail: 'c/Veritasium' });
+    assertEqual(reportFor('https://forum.example.com/t/some-topic-slug/9912', false).detail,
+        't/some-topic-slug');
+    assertEqual(reportFor('https://x.com/i/lists/12345', false).detail, 'i/lists');
+    assertEqual(reportFor('https://reddit.com/u/someone', false).detail, 'u/someone');
+});
+
+test('rules: a single-character prefix with nothing after it stands alone', () => {
+    assertEqual(reportFor('https://example.com/c', false).detail, 'c');
+});
+
+test('rules: a single-character prefix after a skipped locale still extends', () => {
+    assertEqual(reportFor('https://example.com/en/t/topic', false).detail, 't/topic');
 });

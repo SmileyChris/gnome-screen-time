@@ -5,7 +5,6 @@
 
 export const REPO_HOSTS = ['github.com', 'gitlab.com', 'codeberg.org', 'bitbucket.org',
     'git.sr.ht', 'gitea.com'];
-export const REDDIT_HOSTS = ['reddit.com', 'old.reddit.com'];
 // Matched as a suffix, not an exact host: every language edition is its own
 // subdomain (en.wikipedia.org, de.wikipedia.org), and the bare domain works too.
 export const WIKI_DOMAINS = ['wikipedia.org', 'wiktionary.org', 'wikiquote.org'];
@@ -49,14 +48,23 @@ function skippable(segment) {
     return NUMERIC_SEGMENT.test(segment) || LOCALE_SEGMENT.test(segment);
 }
 
-// The first segment worth recording. The last segment is never skipped, so a
-// path that is nothing but dates still reports its deepest part rather than
-// collapsing to the bare host.
-function firstMeaningful(segs) {
+// The first segment worth recording, or - for a path with no such segment,
+// like a date archive - the skipped run itself: "21" alone would merge every
+// month and year into one row, while "2026/09/21" is what the page is. Capped
+// at the length of a date so an all-numeric id path cannot become a huge key.
+const MAX_SKIPPED_JOIN = 3;
+
+function defaultDetail(segs) {
     let i = 0;
-    while (i < segs.length - 1 && skippable(segs[i]))
+    while (i < segs.length && skippable(segs[i]))
         i++;
-    return segs[i] ?? '';
+    if (i === segs.length)
+        return segs.slice(0, MAX_SKIPPED_JOIN).join('/');
+    // A single character is a routing prefix, not a unit: /r/<sub>,
+    // /c/<channel>, /t/<topic>, /u/<user>. Keep it with the name it routes to.
+    if (segs[i].length === 1 && segs[i + 1])
+        return `${segs[i]}/${segs[i + 1]}`;
+    return segs[i];
 }
 
 function inDomain(host, domain) {
@@ -70,15 +78,13 @@ function keyOf(issueId) {
 }
 
 // The site unit, or '' when the path gives nothing. Every branch falls
-// through to the first meaningful segment, so an unrecognised path on a known
-// host still reports something rather than going blank. The host rules run
+// through to defaultDetail(), so an unrecognised path on a known host still
+// reports something rather than going blank. The host rules run
 // first and take their segments raw: a two-letter repo owner or an article
 // named for a year must not be mistaken for a locale or a date.
 function detailFor(host, segs) {
     if (REPO_HOSTS.includes(host))
         return segs.slice(0, 2).join('/');
-    if (REDDIT_HOSTS.includes(host) && segs[0] === 'r' && segs[1])
-        return `r/${segs[1]}`;
     if (WIKI_DOMAINS.some(d => inDomain(host, d)) && segs[0] === 'wiki' && segs[1])
         return segs[1];
     let container = REGISTRY_CONTAINERS[host];
@@ -98,7 +104,7 @@ function detailFor(host, segs) {
     }
     if (host === LINEAR_HOST && segs[1] === 'issue' && segs[2])
         return keyOf(segs[2]);
-    return firstMeaningful(segs);
+    return defaultDetail(segs);
 }
 
 export function reportFor(urlString, incognito) {

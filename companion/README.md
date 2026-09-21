@@ -14,7 +14,6 @@ generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`
 - `detail`: the site unit, taken from the path only:
   - `owner/repo` on github.com, gitlab.com, codeberg.org, bitbucket.org,
     git.sr.ht and gitea.com
-  - `r/<sub>` on reddit.com and old.reddit.com
   - the article on `*.wikipedia.org`, `*.wiktionary.org`, `*.wikiquote.org`
   - the package on npmjs.com, pypi.org, crates.io and rubygems.org; a scoped
     npm package keeps its scope (`@babel/core`)
@@ -24,9 +23,14 @@ generated `browser-id.js`; `host` and `detail` are computed in `webext/rules.js`
   - the first path segment on every other host, and on any host above whose
     path does not match its rule, after skipping a leading run of date
     segments (`/2026/09/21/technology/...` -> `technology`) and a locale
-    prefix (`/en-US/docs/...` -> `docs`). The last segment is never skipped,
-    so a path always reports something. Host rules above read their segments
-    raw, so a two-letter repo owner and an article named for a year survive.
+    prefix (`/en-US/docs/...` -> `docs`). A path with nothing else in it
+    reports the skipped run whole, up to three segments
+    (`/2026/09/21` -> `2026/09/21`), so a path always reports something.
+    A single-character segment is a routing prefix and keeps the next segment
+    with it, which is how reddit gets `r/<sub>` with no rule of its own
+    (`/c/Veritasium` -> `c/Veritasium`, `/t/<topic>` -> `t/<topic>`).
+    Host rules above read their segments raw, so a two-letter repo owner and
+    an article named for a year survive.
 
   Segments are URL-decoded and cut at 64 characters.
 
