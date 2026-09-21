@@ -3,6 +3,7 @@ import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
+import { ActivitySourceRegistry } from './activitySources.js';
 
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
@@ -12,13 +13,27 @@ const IDLE_INHIBIT_FLAG = 8;
 // While idle but inhibited, ask again this often.
 const IDLE_RECHECK_SECONDS = 60;
 
+// Nothing outside the compositor can read a window title here, so the only
+// way to see what a real desktop resolves to is a log line:
+//   journalctl -f -o cat /usr/bin/gnome-shell | grep ScreenTime
+const DEBUG = GLib.getenv('GNOME_SHELL_EXTENSION_SCREEN_TIME_DEBUG') !== null;
+
 export class UsageTracker {
-    constructor(store, settings) {
+    constructor(store, settings, sources = new ActivitySourceRegistry()) {
         this._store = store;
         this._settings = settings;
+        this._sources = sources;
         this._lastTime = Date.now();
-        this._appId = null;
-        this._appName = null;
+
+        // Where time is being credited right now: [appId], [appId, activityId]
+        // or [appId, activityId, detailId], with matching display names. Null
+        // while nothing is focused or the user is away.
+        this._path = null;
+        this._names = null;
+        this._win = null;
+        // Bumped whenever the focused window or presence changes, so a
+        // resolve that started against an older state is dropped on return.
+        this._resolveSeq = 0;
 
         // screenShield only exists when GNOME can lock at all (GDM + systemd),
         // so presence detection treats it as optional; max-interval is the backstop.
@@ -130,6 +145,8 @@ export class UsageTracker {
                 if (!this._activeWatchId)
                     return;
                 if (inhibited) {
+                    if (DEBUG)
+                        console.log('[ScreenTime] idle, but idle is inhibited; still counting');
                     // Never leave an older recheck registered but unreachable.
                     this._clearIdleRecheck();
                     this._idleRecheckId = GLib.timeout_add_seconds(
@@ -141,6 +158,8 @@ export class UsageTracker {
                     return;
                 }
                 this._idle = true;
+                if (DEBUG)
+                    console.log('[ScreenTime] idle');
                 this._onPresenceChanged();
             });
     }
@@ -154,6 +173,8 @@ export class UsageTracker {
             this._clearIdleRecheck();
             if (this._idle) {
                 this._idle = false;
+                if (DEBUG)
+                    console.log('[ScreenTime] active');
                 this._onPresenceChanged();
             }
         });
@@ -188,24 +209,24 @@ export class UsageTracker {
         if (app.is_window_backed()) {
             let wmClass = win.get_wm_class();
             if (wmClass)
-                return { id: `wmclass:${wmClass}`, name: app.get_name() || wmClass };
+                return { id: `wmclass:${wmClass}`, name: app.get_name() || wmClass, win };
             // No .desktop file and no WM_CLASS: nothing stable to key on, and
             // Shell names these "Unknown". They are transient windows (portals,
             // tooltips, switchers), never an app you used, so skip them.
             return null;
         }
-        return { id: app.get_id(), name: app.get_name() };
+        return { id: app.get_id(), name: app.get_name(), win };
     }
 
-    // Credits elapsed time (since _lastTime) to whatever app is currently
+    // Credits elapsed time (since _lastTime) to whatever path is currently
     // tracked and advances the clock. The store keeps whole seconds, so the
     // fraction it rounds away is left on the clock instead of being dropped:
-    // short flushes (quick focus changes) then neither lose time nor inflate
-    // it.
+    // short flushes (quick focus or pane changes) then neither lose time nor
+    // inflate it.
     _flush(now) {
         let elapsed = (now - this._lastTime) / 1000;
         let secs = Math.min(elapsed, this._getMaxInterval());
-        if (!this._appId) {
+        if (!this._path) {
             this._lastTime = now;
             return;
         }
@@ -219,10 +240,61 @@ export class UsageTracker {
         }
         let credited = Math.round(secs);
         if (credited > 0)
-            this._store.addTime(this._appId, this._appName, credited);
+            this._store.addTime(this._path, this._names, credited);
         // When max-interval capped the stretch, the excess is discarded on
         // purpose (that is what the setting is for), so no residual.
         this._lastTime = secs < elapsed ? now : now - (secs - credited) * 1000;
+    }
+
+    // Starts tracking `app` (or nothing) at the app level only. The clock
+    // belongs to _flush, which every caller runs first, so this never touches
+    // it. The activity source is asked asynchronously; until it answers, time
+    // belongs to the app alone.
+    _setCurrent(app) {
+        this._path = app ? [app.id] : null;
+        this._names = app ? [app.name] : null;
+        this._win = app?.win ?? null;
+        this._resolveSeq++;
+        if (DEBUG && this._path)
+            console.log(`[ScreenTime] path: ${this._path.join(' / ')}`);
+        if (app)
+            this._kickResolve();
+    }
+
+    _kickResolve() {
+        if (!this._path || !this._win || this._away)
+            return;
+        let seq = this._resolveSeq;
+        this._sources.resolve(this._win, this._path[0]).then(sub => {
+            // The window or presence changed while the resolve was running.
+            if (seq !== this._resolveSeq || this._away || !this._path)
+                return;
+            this._applySubPath(sub);
+        }).catch(e => console.error(`[ScreenTime] resolve apply failed: ${e.message}`));
+    }
+
+    // Switches to the resolved sub-path. Time since the last flush belongs to
+    // the previous path, so it is banked first; pane switches inside one
+    // window are then credited to within resolve latency, not the flush tick.
+    _applySubPath(sub) {
+        let path = [this._path[0]];
+        let names = [this._names[0]];
+        if (sub) {
+            path.push(sub.activityId);
+            names.push(sub.activityName);
+            if (sub.detailId) {
+                path.push(sub.detailId);
+                names.push(sub.detailName);
+            }
+        }
+        if (path.join('\0') === this._path.join('\0'))
+            return;
+
+        this._flush(Date.now());
+        this._path = path;
+        this._names = names;
+        if (DEBUG)
+            console.log(`[ScreenTime] path: ${path.join(' / ')}`);
     }
 
     // Going away banks the time so far and stops tracking; coming back re-reads
@@ -230,12 +302,10 @@ export class UsageTracker {
     _setAway(away) {
         let now = Date.now();
         this._away = away;
-        // Going away, this banks the tracked time; coming back, _appId is
+        // Going away, this banks the tracked time; coming back, _path is
         // already null, so it only resets the clock for the app picked up next.
         this._flush(now);
-        let app = away ? null : this._currentApp();
-        this._appId = app?.id ?? null;
-        this._appName = app?.name ?? null;
+        this._setCurrent(away ? null : this._currentApp());
     }
 
     _onPresenceChanged() {
@@ -258,15 +328,21 @@ export class UsageTracker {
 
         let now = Date.now();
         this._flush(now);
+        this._setCurrent(this._currentApp());
+    }
 
-        let app = this._currentApp();
-        this._appId = app?.id ?? null;
-        this._appName = app?.name ?? null;
+    // Banks the interval so far and asks the sources again. Used by the 30s
+    // tick.
+    _refresh() {
+        if (this._away || !this._path)
+            return;
+        this._flush(Date.now());
+        // The pane or tab may have changed without a focus event.
+        this._kickResolve();
     }
 
     _onFlushTick() {
-        if (!this._away && this._appId)
-            this._flush(Date.now());
+        this._refresh();
         return GLib.SOURCE_CONTINUE;
     }
 
@@ -300,5 +376,11 @@ export class UsageTracker {
         this._clearIdleWatches();
         this._cancellable.cancel();
         this._flush(Date.now());
+        this._resolveSeq++;   // drop any resolve still in flight
+        this._sources.destroy();
+        this._sources = null;
+        this._win = null;
+        this._path = null;
+        this._names = null;
     }
 }
