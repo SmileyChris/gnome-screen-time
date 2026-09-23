@@ -21,8 +21,6 @@ import { readProjects } from './clients.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
-// The hours override row's heading. One helper, since _tickLive() rewrites
-// it while a session runs.
 // One compact line of the Activities block: name on the left, hours on the
 // right, indented and dimmed below the app it belongs to.
 function activityLine(name, seconds, depth) {
@@ -72,14 +70,9 @@ function clockOf(ms) {
 // current.
 const LIVE_TICK_SECONDS = 30;
 
-// The subtitle text for a session row: its start-end clock times, its
-// hours, and any interrupted/cleanStop/exported markers. Factored out of
-// _sessionRow so _tickLive() can recompute it for a still-running session
-// without rebuilding the row - actualHoursOf()/hoursOf() already read
-// Date.now() fresh on every call; something just has to call them again
-// and push the result into the widget that's already on screen.
 // A session row's times, shown at the right of its title line so a row
-// takes one line unless it has something to flag.
+// takes one line unless it has something to flag. _tickLive() recomputes
+// it for a running session: actualHoursOf() reads Date.now() fresh.
 function sessionTimes(session) {
     let end = session.endMs === null ? 'now' : clockOf(session.endMs);
     let actual = actualHoursOf(session);
