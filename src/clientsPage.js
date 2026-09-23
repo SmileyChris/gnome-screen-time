@@ -62,6 +62,23 @@ export function buildClientsPage(settings, window) {
     // group from scratch (see the "Add a project" handler below).
     let addProjectRows = new Map();
 
+    // Built once, not by render(): its GSettings binding (the nudge
+    // SpinRow) and the ShortcutRow's key listener must not be torn down
+    // and recreated on every client or project change, only to be
+    // re-seeded with the same values.
+    let settingsGroup = new Adw.PreferencesGroup({ title: 'Settings' });
+    settingsGroup.add(new ShortcutRow(
+        settings, 'toggle-clock', 'Toggle the clock',
+        'Stops the clock, or starts the client you used last.'));
+    const nudgeRow = new Adw.SpinRow({
+        title: 'Nudge when idle',
+        subtitle: 'Minutes idle on the clock before a notification offers to stop it. 0 disables it.',
+        adjustment: new Gtk.Adjustment({ lower: 0, upper: 480, step_increment: 5 }),
+    });
+    settings.bind('clock-nudge-minutes', nudgeRow, 'value', Gio.SettingsBindFlags.DEFAULT);
+    settingsGroup.add(nudgeRow);
+    page.add(settingsGroup);
+
     const render = () => {
         for (let group of groups.splice(0))
             page.remove(group);
@@ -195,22 +212,10 @@ export function buildClientsPage(settings, window) {
         groups.push(addClientGroup);
         page.add(addClientGroup);
 
-        // Built fresh every render() along with the client and add-client
-        // groups above: Adw.PreferencesPage can only append, so the
-        // simplest way to keep this group last is to remove and rebuild it
-        // with everything else rather than track its position separately.
-        let settingsGroup = new Adw.PreferencesGroup({ title: 'Settings' });
-        settingsGroup.add(new ShortcutRow(
-            settings, 'toggle-clock', 'Toggle the clock',
-            'Stops the clock, or starts the client you used last.'));
-        const nudgeRow = new Adw.SpinRow({
-            title: 'Nudge when idle',
-            subtitle: 'Minutes idle on the clock before a notification offers to stop it. 0 disables it.',
-            adjustment: new Gtk.Adjustment({ lower: 0, upper: 480, step_increment: 5 }),
-        });
-        settings.bind('clock-nudge-minutes', nudgeRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-        settingsGroup.add(nudgeRow);
-        groups.push(settingsGroup);
+        // Adw.PreferencesPage can only append, so the Settings group -
+        // built once, above, and never cleared from groups[] - is moved
+        // back to the end here rather than rebuilt.
+        page.remove(settingsGroup);
         page.add(settingsGroup);
     };
 
