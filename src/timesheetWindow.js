@@ -765,6 +765,8 @@ export class TimesheetWindow {
         });
         this._registerFocusField(session, which, entry);
 
+        // Returns whether the change landed, so a snap only offers an undo
+        // for one that did.
         let apply = ms => {
             let fields = which === 'start' ? { startMs: ms } : { endMs: ms };
             try {
@@ -773,7 +775,7 @@ export class TimesheetWindow {
                 let result = JSON.parse(json);
                 if (result.error) {
                     this._toast(describeUpdateError(result.error));
-                    return;
+                    return false;
                 }
                 // Applied: the server's copy is now the truth and the
                 // ClockChanged this triggers will rebuild this row, so the
@@ -782,10 +784,53 @@ export class TimesheetWindow {
                 // instead of re-seeding from the session's new value.
                 draft[dirtyKey] = false;
                 this._toastIfUnsaved(result);
+                return true;
             } catch (e) {
                 this._toast(`Failed: ${e.message}`);
+                return false;
             }
         };
+
+        // An arrow that moves this time to `target`, with the exact time in
+        // its tooltip and an Undo on the toast that confirms it.
+        let snap = (icon, target, tooltip) => {
+            let button = new Gtk.Button({
+                icon_name: icon,
+                css_classes: ['flat'],
+                valign: Gtk.Align.CENTER,
+                tooltip_text: tooltip,
+            });
+            button.connect('clicked', () => {
+                let before = current;
+                if (!apply(target))
+                    return;
+                let label = which === 'start' ? 'Started' : 'Ended';
+                this._toastUndo(`${label} at ${clockOf(target)}`, () => apply(before));
+            });
+            return button;
+        };
+        // Earlier sits before the field and later after it, so each arrow
+        // points the way it moves the time.
+        let earlier = null;
+        let later = null;
+        if (which === 'start') {
+            let previousEnd = this._previousEndFor(session);
+            if (previousEnd !== null && previousEnd < session.startMs) {
+                earlier = snap('go-previous-symbolic', previousEnd,
+                    `Start at ${clockOf(previousEnd)}, when the previous session ended`);
+            }
+            let firstActivity = evidence.firstActivityMs ?? null;
+            if (firstActivity !== null && firstActivity > session.startMs) {
+                later = snap('go-next-symbolic', firstActivity,
+                    `Start at ${clockOf(firstActivity)}, the first activity recorded`);
+            }
+        } else {
+            let nextStart = this._nextStartFor(session);
+            if (nextStart !== null && nextStart > session.endMs) {
+                later = snap('go-next-symbolic', nextStart,
+                    `End at ${clockOf(nextStart)}, when the next session started`);
+            }
+        }
 
         let commit = () => {
             if (!draft[dirtyKey])
@@ -802,43 +847,37 @@ export class TimesheetWindow {
         let focus = new Gtk.EventControllerFocus();
         focus.connect('leave', commit);
         entry.add_controller(focus);
+        if (earlier)
+            box.append(earlier);
         box.append(entry);
-
-        if (which === 'start') {
-            let firstActivity = evidence.firstActivityMs ?? null;
-            if (firstActivity !== null && firstActivity > session.startMs) {
-                let snap = new Gtk.Button({
-                    label: `Snap to ${clockOf(firstActivity)}`,
-                    css_classes: ['flat'],
-                    valign: Gtk.Align.CENTER,
-                    tooltip_text: 'Move the start to the first activity recorded in this session.',
-                });
-                snap.connect('clicked', () => apply(firstActivity));
-                box.append(snap);
-            }
-            let previousEnd = this._previousEndFor(session);
-            if (previousEnd !== null && previousEnd !== session.startMs) {
-                let butt = new Gtk.Button({
-                    label: `Snap to ${clockOf(previousEnd)}`,
-                    css_classes: ['flat'],
-                    valign: Gtk.Align.CENTER,
-                    tooltip_text: 'Start where the previous session ended.',
-                });
-                butt.connect('clicked', () => apply(previousEnd));
-                box.append(butt);
-            }
-        }
+        if (later)
+            box.append(later);
     }
 
-    // The end of the latest session that finished at or before this one
-    // started, which is what "I forgot to switch" should snap to.
+    // The end of the latest session that day that finished at or before
+    // this one started, which is what "I forgot to switch" should snap to.
+    // The same day only: the first session of a morning must not reach
+    // back to last night.
     _previousEndFor(session) {
         let best = null;
         for (let other of this._sessions ?? []) {
-            if (other.id === session.id || other.endMs === null)
+            if (other.id === session.id || other.endMs === null || other.dayKey !== session.dayKey)
                 continue;
             if (other.endMs <= session.startMs && (best === null || other.endMs > best))
                 best = other.endMs;
+        }
+        return best;
+    }
+
+    // The start of the first session that day beginning at or after this
+    // one ended, which is where "I forgot to switch" should extend it to.
+    _nextStartFor(session) {
+        let best = null;
+        for (let other of this._sessions ?? []) {
+            if (other.id === session.id || other.dayKey !== session.dayKey)
+                continue;
+            if (other.startMs >= session.endMs && (best === null || other.startMs < best))
+                best = other.startMs;
         }
         return best;
     }
@@ -1170,6 +1209,12 @@ export class TimesheetWindow {
 
     _toast(text) {
         this._toasts.add_toast(new Adw.Toast({ title: text }));
+    }
+
+    _toastUndo(text, onUndo) {
+        let toast = new Adw.Toast({ title: text, button_label: 'Undo' });
+        toast.connect('button-clicked', onUndo);
+        this._toasts.add_toast(toast);
     }
 
     _showError(text) {
