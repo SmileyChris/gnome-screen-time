@@ -21,7 +21,7 @@ export function activeClients(settings) {
 }
 
 // Whether `name` still names an entry in the client list at all - active or
-// not. A client can be deleted from Preferences while
+// not. A client can be deleted from the Timesheet's Clients page while
 // last-client (the setting the panel's Start button and the toggle-clock
 // shortcut both start blindly) still remembers its name; starting a clock
 // for a name no longer in the list at all would create billing history for
@@ -38,10 +38,10 @@ export function isKnownClient(settings, name) {
 // The client a paused clock would resume, or null. Paused means no session
 // is running but last-client still names a client on the list. last-client
 // is empty once stopped (stop forgets it), on a fresh install and before any
-// client has been clocked. It can also name a client since deleted from
-// Preferences (see isKnownClient). `running` is ClockStore.running. The clock
-// card and the client rows both call this, so they can never disagree about
-// which client is paused.
+// client has been clocked. It can also name a client since deleted from the
+// Timesheet's Clients page (see isKnownClient). `running` is
+// ClockStore.running. The clock card and the client rows both call this, so
+// they can never disagree about which client is paused.
 export function pausedClient(settings, running) {
     if (running)
         return null;

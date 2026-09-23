@@ -3,7 +3,7 @@
 // drift apart. No imports, so plain gjs tests cover it.
 
 // Opens the Timesheet on its Clients page (the popup's "Add client…",
-// Preferences' Clients row).
+// Preferences' "Clients & clock" row).
 export const CLIENTS_ARG = '--clients';
 
 const DAY_PREFIX = '--day=';

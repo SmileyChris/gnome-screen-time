@@ -20,7 +20,7 @@ import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
 import { BrowserSource } from './browserSource.js';
 import { DbusService } from './dbusService.js';
 import { ClockDBus } from './clockDBus.js';
-import { dayArg } from './timesheetArgs.js';
+import { dayArg, CLIENTS_ARG } from './timesheetArgs.js';
 
 // GNOME Shell caches an extension's ES modules for the life of the Shell
 // process, so module-scoped state survives a disable()/enable() cycle (a
@@ -113,7 +113,7 @@ export default class ScreenTimeExtension extends Extension {
             this._indicator.addToPanel(this.uuid);
             this._popup = new PopupWidget(this._indicator.menu, this._store,
                 this._settings, () => this._openPrefs(), this._clock,
-                day => this._openTimesheet(day), () => this._intervals);
+                opts => this._openTimesheet(opts), () => this._intervals);
 
             // The browser companion pushes into this source over D-Bus; the same
             // instance sits in the registry the tracker reads from.
@@ -295,14 +295,17 @@ export default class ScreenTimeExtension extends Extension {
     // /usr/bin/gjs rather than bare `gjs`: a systemd user session's PATH is
     // frequently minimal, which is the same trap the zellij lookup hits.
     // Never wait() on this subprocess: it would block the compositor.
-    // `day` (a dayKey, or null) scrolls the Timesheet to that day; an
-    // already-open Timesheet gets it too, since the new process hands its
-    // command line over and exits (see timesheet.js).
-    _openTimesheet(day = null) {
+    // `day` (a dayKey, or null) scrolls the Timesheet to that day; `clients`
+    // opens it on the Clients page. An already-open Timesheet gets both too,
+    // since the new process hands its command line over and exits (see
+    // timesheet.js).
+    _openTimesheet({ day = null, clients = false } = {}) {
         try {
             let argv = ['/usr/bin/gjs', '-m', GLib.build_filenamev([this.path, 'timesheet.js'])];
             if (day)
                 argv.push(dayArg(day));
+            if (clients)
+                argv.push(CLIENTS_ARG);
             Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
         } catch (e) {
             console.error(`[ScreenTime] could not launch the timesheet: ${e.message}`);
