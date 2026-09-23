@@ -14,6 +14,12 @@
 // billedHours: 0) is different from these: it still has a row and is still
 // exported, with hours: 0, so the receiving side's total is corrected
 // rather than left stuck at whatever it was before.
+//   - a project is renamed or deleted (same as a client rename: the old
+//     external_id's row is orphaned).
+// General (no project) rows keep the pre-project external_id
+// (screen-time:<client>:<day>, no trailing ':'), so rows sent before
+// projects existed still match on re-export instead of forking into a new
+// row.
 
 export const EXTERNAL_ID_PREFIX = 'screen-time';
 
@@ -89,25 +95,31 @@ export function countSkippedUnknown(sessions, clients) {
     ).length;
 }
 
-// One row per client per day. Identity is external_id, which is stable across
-// re-exports: the receiving side upserts on it, so correcting a session and
-// exporting the period again updates the row instead of duplicating it.
+// One row per client, project and day. Identity is external_id, which is
+// stable across re-exports: the receiving side upserts on it, so correcting
+// a session and exporting the period again updates the row instead of
+// duplicating it. The key below is that same upsert identity in map-key
+// form; with a project it has one more '\0'-separated (':'-separated in
+// external_id) component after the date.
 //
 // A client name may itself contain ':' (e.g. "A:B"); external_id stays
 // unambiguous to parse back because the date is always the fixed-width
-// (YYYY-MM-DD) final component — strip the "screen-time:" prefix and the
-// ":YYYY-MM-DD" suffix and whatever remains is the client, colons and all.
+// (YYYY-MM-DD) component — strip the "screen-time:" prefix and the
+// ":YYYY-MM-DD" (and, for a project row, trailing ":<project>") and
+// whatever remains between is the client, colons and all.
 export function mergeSessions(sessions, clients, nowMs = Date.now()) {
     let byKey = new Map();
 
     for (let session of selectExportable(sessions, clients)) {
         let ms = sessionMs(session);
-        let key = `${session.dayKey}\0${session.client}`;
+        let project = session.project ?? null;
+        let key = `${session.dayKey}\0${session.client}\0${project ?? ''}`;
         let row = byKey.get(key);
         if (!row) {
             row = {
-                external_id: `${EXTERNAL_ID_PREFIX}:${session.client}:${session.dayKey}`,
+                external_id: `${EXTERNAL_ID_PREFIX}:${session.client}:${session.dayKey}${project === null ? '' : `:${project}`}`,
                 client: session.client,
+                project: project ?? '',
                 date: session.dayKey,
                 totalMs: 0,
                 notes: [],
@@ -124,6 +136,7 @@ export function mergeSessions(sessions, clients, nowMs = Date.now()) {
         .map(row => ({
             external_id: row.external_id,
             client: row.client,
+            project: row.project,
             date: row.date,
             // Rounded once, on the total, straight from whole milliseconds:
             // row.totalMs / 36000 is row.totalMs / 3600000 (hours) * 100
@@ -133,7 +146,8 @@ export function mergeSessions(sessions, clients, nowMs = Date.now()) {
             hours: Math.round(row.totalMs / 36000) / 100,
             description: row.notes.join('; '),
         }))
-        .sort((a, b) => compareStrings(a.date, b.date) || compareStrings(a.client, b.client));
+        .sort((a, b) => compareStrings(a.date, b.date) || compareStrings(a.client, b.client)
+            || compareStrings(a.project, b.project));
 }
 
 export function toJSON(rows) {
@@ -154,10 +168,10 @@ function csvField(value) {
 }
 
 export function toCSV(rows) {
-    let lines = ['external_id,client,date,hours,description'];
+    let lines = ['external_id,client,project,date,hours,description'];
     for (let row of rows) {
         lines.push([
-            row.external_id, row.client, row.date, row.hours, row.description,
+            row.external_id, row.client, row.project, row.date, row.hours, row.description,
         ].map(csvField).join(','));
     }
     return `${lines.join('\n')}\n`;

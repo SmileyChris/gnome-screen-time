@@ -20,7 +20,7 @@ test('mergeSessions: one session becomes one row', () => {
     let rows = mergeSessions([session({ description: 'invoicing setup' })], CLIENTS);
     assertEqual(rows, [{
         external_id: 'screen-time:ACME:2026-09-11',
-        client: 'ACME', date: '2026-09-11', hours: 1, description: 'invoicing setup',
+        client: 'ACME', project: '', date: '2026-09-11', hours: 1, description: 'invoicing setup',
     }]);
 });
 
@@ -185,7 +185,7 @@ test('mergeSessions: a day whose only session is zeroed exports hours: 0', () =>
     ], CLIENTS);
     assertEqual(rows, [{
         external_id: 'screen-time:ACME:2026-09-11',
-        client: 'ACME', date: '2026-09-11', hours: 0, description: 'corrected to zero',
+        client: 'ACME', project: '', date: '2026-09-11', hours: 0, description: 'corrected to zero',
     }]);
 });
 
@@ -199,6 +199,24 @@ test('mergeSessions: a client name containing \':\' keeps external_id parseable'
     let withoutPrefix = rows[0].external_id.slice(`${EXTERNAL_ID_PREFIX}:`.length);
     let recoveredClient = withoutPrefix.slice(0, withoutPrefix.length - ':2026-09-11'.length);
     assertEqual(recoveredClient, 'A:B');
+});
+
+test('mergeSessions: General keeps the old external_id, projects get their own rows', () => {
+    let rows = mergeSessions([
+        session({ id: 'a' }),
+        session({ id: 'b', project: 'Site', endMs: 1800000 }),
+        session({ id: 'c', project: 'Site', endMs: 1800000 }),
+    ], CLIENTS);
+    assertEqual(rows, [
+        {
+            external_id: 'screen-time:ACME:2026-09-11', client: 'ACME', project: '',
+            date: '2026-09-11', hours: 1, description: '',
+        },
+        {
+            external_id: 'screen-time:ACME:2026-09-11:Site', client: 'ACME', project: 'Site',
+            date: '2026-09-11', hours: 1, description: '',
+        },
+    ]);
 });
 
 // --- selectExportable: the single source of truth for "what counts as
@@ -279,29 +297,29 @@ test('countSkippedUnknown: sums across several unknown-client sessions, ignores 
 
 test('toJSON: serialises rows as an array with a trailing newline', () => {
     let json = toJSON([{
-        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME',
+        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME', project: '',
         date: '2026-09-11', hours: 1, description: '',
     }]);
     assertEqual(json.endsWith('\n'), true);
     assertEqual(JSON.parse(json), [{
-        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME',
+        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME', project: '',
         date: '2026-09-11', hours: 1, description: '',
     }]);
 });
 
 test('toCSV: header, and fields with commas or quotes are escaped', () => {
     let csv = toCSV([{
-        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME',
+        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME', project: '',
         date: '2026-09-11', hours: 1.25, description: 'fixed "the" bug, twice',
     }]);
-    assertEqual(csv.split('\n')[0], 'external_id,client,date,hours,description');
+    assertEqual(csv.split('\n')[0], 'external_id,client,project,date,hours,description');
     assertEqual(csv.split('\n')[1],
-        'screen-time:ACME:2026-09-11,ACME,2026-09-11,1.25,"fixed ""the"" bug, twice"');
+        'screen-time:ACME:2026-09-11,ACME,,2026-09-11,1.25,"fixed ""the"" bug, twice"');
 });
 
 test('toCSV: a field with a comma, a double quote AND a newline is escaped as one field', () => {
     let rows = [{
-        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME',
+        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME', project: '',
         date: '2026-09-11', hours: 2,
         description: 'line one, "quoted"\nline two',
     }];
@@ -310,29 +328,37 @@ test('toCSV: a field with a comma, a double quote AND a newline is escaped as on
     // The embedded newline means the row's data spans two physical lines.
     assertEqual(dataLines.length, 4); // header, row line 1, row line 2, trailing ''
     assertEqual(dataLines[1] + '\n' + dataLines[2],
-        'screen-time:ACME:2026-09-11,ACME,2026-09-11,2,"line one, ""quoted""\nline two"');
+        'screen-time:ACME:2026-09-11,ACME,,2026-09-11,2,"line one, ""quoted""\nline two"');
 });
 
 test('toCSV: a bare carriage return is escaped like a newline', () => {
     // /[",\n]/ alone misses a lone \r (no accompanying \n); many CSV
     // readers treat an unquoted \r as a row break just like \n.
     let rows = [{
-        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME',
+        external_id: 'screen-time:ACME:2026-09-11', client: 'ACME', project: '',
         date: '2026-09-11', hours: 1, description: 'line one\rline two',
     }];
     let csv = toCSV(rows);
     assertEqual(csv.split('\n')[1],
-        'screen-time:ACME:2026-09-11,ACME,2026-09-11,1,"line one\rline two"');
+        'screen-time:ACME:2026-09-11,ACME,,2026-09-11,1,"line one\rline two"');
 });
 
 test('toCSV: a client name containing a comma is escaped', () => {
     let rows = [{
         // The comma lands in external_id too (it embeds the client name),
         // so both fields need quoting independently.
-        external_id: 'screen-time:Acme, Inc:2026-09-11', client: 'Acme, Inc',
+        external_id: 'screen-time:Acme, Inc:2026-09-11', client: 'Acme, Inc', project: '',
         date: '2026-09-11', hours: 1, description: '',
     }];
     let csv = toCSV(rows);
     assertEqual(csv.split('\n')[1],
-        '"screen-time:Acme, Inc:2026-09-11","Acme, Inc",2026-09-11,1,');
+        '"screen-time:Acme, Inc:2026-09-11","Acme, Inc",,2026-09-11,1,');
+});
+
+test('toCSV: a project row carries its project', () => {
+    let csv = toCSV([{
+        external_id: 'screen-time:ACME:2026-09-11:Site', client: 'ACME', project: 'Site',
+        date: '2026-09-11', hours: 1, description: '',
+    }]);
+    assertEqual(csv.split('\n')[1], 'screen-time:ACME:2026-09-11:Site,ACME,Site,2026-09-11,1,');
 });
