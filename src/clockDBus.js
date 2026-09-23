@@ -1,6 +1,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import { evidenceFor } from './evidence.js';
+import { getAppNames } from './appNames.js';
 import { readClients } from './clients.js';
 import { mergeSessions, selectExportable, countSkippedUnknown, toJSON, toCSV } from './timeExport.js';
 
@@ -118,7 +119,12 @@ export class ClockDBus {
         // files, so flush the tail first. The window must never see less
         // evidence than the Shell already holds.
         this._intervals.flushAll();
-        return JSON.stringify(evidenceFor(session, this._intervals));
+        let evidence = evidenceFor(session, this._intervals);
+        // Level-1 renames (see appNames.js), as the popup shows them.
+        let names = getAppNames(this._settings);
+        for (let entry of evidence.entries)
+            entry.displayName = names[entry.appId] || entry.displayName;
+        return JSON.stringify(evidence);
     }
 
     // Whether the store's most recent save attempt actually reached disk -

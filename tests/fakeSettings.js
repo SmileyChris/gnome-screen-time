@@ -14,6 +14,7 @@ export class FakeSettings {
         this._values = {
             clients: new GLib.Variant('a(sbb)', []),
             'app-limits': new GLib.Variant('a{si}', appLimits),
+            'app-names': new GLib.Variant('a{ss}', {}),
         };
         this._strings = { 'last-client': '', 'panel-time': 'client-or-screen' };
         this._booleans = { 'show-total-in-panel': true, 'panel-time-migrated': false };

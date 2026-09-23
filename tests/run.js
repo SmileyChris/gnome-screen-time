@@ -20,6 +20,7 @@ const FILES = [
     './zellijLayout.test.js',
     './formatTime.test.js',
     './appLimits.test.js',
+    './appNames.test.js',
     './usageStore.test.js',
     './intervalLog.test.js',
     './clockStore.test.js',
