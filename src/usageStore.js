@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import { getAppNames } from './appNames.js';
 
 Gio._promisify(Gio.File.prototype, 'load_contents_async', 'load_contents_finish');
 
@@ -37,12 +38,15 @@ export function todayKeyFor(settings) {
 
 // appId -> displayName for every app in `data`, shared by UsageStore and
 // prefs.js so both pick from the same set. Skips "Unknown", Shell's fallback
-// name for windows it can't identify.
-export function knownAppsFromData(data) {
+// name for windows it can't identify, unless it was renamed. `names` is the
+// `app-names` map (see appNames.js).
+export function knownAppsFromData(data, names = {}) {
     let known = new Map();
     for (let day of Object.values(data)) {
         for (let [appId, info] of Object.entries(day)) {
-            if (info.displayName !== 'Unknown')
+            if (names[appId])
+                known.set(appId, names[appId]);
+            else if (info.displayName !== 'Unknown')
                 known.set(appId, info.displayName);
         }
     }
@@ -294,7 +298,7 @@ export class UsageStore {
                 siblings = node.children ??= {};
         }
         this._dirty = true;
-        this.onChange?.(path[0], names[0], top.seconds);
+        this.onChange?.(path[0], this._nameFor(path[0], names[0]), top.seconds);
     }
 
     // Sets a node's own time, the part not covered by its children, and
@@ -341,7 +345,7 @@ export class UsageStore {
 
         this._dirty = true;
         let top = day[path[0]];
-        this.onChange?.(path[0], top?.displayName ?? null, top?.seconds ?? 0);
+        this.onChange?.(path[0], top ? this._nameFor(path[0], top.displayName) : null, top?.seconds ?? 0);
         return true;
     }
 
@@ -377,7 +381,7 @@ export class UsageStore {
         }
         this._dirty = true;
         let top = day[path[0]];
-        this.onChange?.(path[0], top?.displayName ?? null, top?.seconds ?? 0);
+        this.onChange?.(path[0], top ? this._nameFor(path[0], top.displayName) : null, top?.seconds ?? 0);
         return true;
     }
 
@@ -406,8 +410,15 @@ export class UsageStore {
         return this.getTotalForDate(todayKey(this._dayStartHour()));
     }
 
+    // A level-1 app's name as shown: the user's rename if any, else the
+    // name tracked for it.
+    _nameFor(appId, trackedName) {
+        return getAppNames(this._settings)[appId] || trackedName;
+    }
+
     // Per-app usage for one day, biggest first, unfiltered. Callers decide
-    // what's worth showing.
+    // what's worth showing. `trackedName` is the Shell's name, which
+    // `displayName` differs from when the app was renamed.
     getUsageForDate(dateKey) {
         let day = this._data[dateKey];
         if (!day)
@@ -415,7 +426,8 @@ export class UsageStore {
         return Object.entries(day)
             .map(([appId, info]) => ({
                 appId,
-                displayName: info.displayName,
+                displayName: this._nameFor(appId, info.displayName),
+                trackedName: info.displayName,
                 seconds: info.seconds,
                 children: info.children ?? null,
             }))
@@ -438,7 +450,7 @@ export class UsageStore {
     }
 
     getKnownApps() {
-        return knownAppsFromData(this._data);
+        return knownAppsFromData(this._data, getAppNames(this._settings));
     }
 
     destroy() {

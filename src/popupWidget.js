@@ -7,6 +7,7 @@ import { todayKey, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow } from './usageRows.js';
+import { setAppName } from './appNames.js';
 
 const MAX_VISIBLE = 5;
 const MIN_ROW_SECONDS = 60;
@@ -355,6 +356,18 @@ export class PopupWidget {
             color,
             depth,
         };
+        // Only level-1 apps are renamed: their ids are unique on their own,
+        // where a child's is only unique under its parent.
+        if (depth === 0) {
+            opts.rename = {
+                renamed: entry.displayName !== entry.trackedName,
+                trackedName: entry.trackedName,
+                onRename: name => {
+                    setAppName(this._settings, entry.appId, name);
+                    this._build();
+                },
+            };
+        }
         if (children.length === 0)
             return this._addLeaf(opts, path, parentTotal);
 

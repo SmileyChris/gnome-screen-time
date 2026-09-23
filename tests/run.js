@@ -14,6 +14,7 @@ const FILES = [
     './zellijLayout.test.js',
     './formatTime.test.js',
     './appLimits.test.js',
+    './appNames.test.js',
     './usageStore.test.js',
     './activitySources.test.js',
 ];

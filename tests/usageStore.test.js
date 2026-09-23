@@ -55,7 +55,7 @@ test('addTime: accumulates per app and reports the running total', async () => {
     store.addTime(['a.desktop'], ['A'], 10);
     store.addTime(['a.desktop'], ['A'], 5);
     assertEqual(store.getUsageForDate(todayKey()),
-        [{ appId: 'a.desktop', displayName: 'A', seconds: 15, children: null }]);
+        [{ appId: 'a.desktop', displayName: 'A', trackedName: 'A', seconds: 15, children: null }]);
     assertEqual(calls, [['a.desktop', 'A', 10], ['a.desktop', 'A', 15]]);
     store.destroy();
 });
@@ -73,7 +73,7 @@ test('addTime: a renamed app keeps its time under the same id', async () => {
     store.addTime(['a.desktop'], ['Old Name'], 10);
     store.addTime(['a.desktop'], ['New Name'], 10);
     assertEqual(store.getUsageForDate(todayKey()),
-        [{ appId: 'a.desktop', displayName: 'New Name', seconds: 20, children: null }]);
+        [{ appId: 'a.desktop', displayName: 'New Name', trackedName: 'New Name', seconds: 20, children: null }]);
     store.destroy();
 });
 
@@ -203,9 +203,9 @@ test('load: time tracked before the read lands is added to it, not lost', async 
     await loaded;
 
     assertEqual(store.getUsageForDate(todayKey()), [
-        { appId: 'a.desktop', displayName: 'A', seconds: 65, children: null },
-        { appId: 'b.desktop', displayName: 'B', seconds: 60, children: null },
-        { appId: 'c.desktop', displayName: 'C', seconds: 5, children: null },
+        { appId: 'a.desktop', displayName: 'A', trackedName: 'A', seconds: 65, children: null },
+        { appId: 'b.desktop', displayName: 'B', trackedName: 'B', seconds: 60, children: null },
+        { appId: 'c.desktop', displayName: 'C', trackedName: 'C', seconds: 5, children: null },
     ]);
     store.destroy();
 });
@@ -259,7 +259,7 @@ test('load: zero-second rows written by older versions are swept out', async () 
     });
 
     assertEqual(store.getUsageForDate(todayKey()),
-        [{ appId: 'a.desktop', displayName: 'A', seconds: 60, children: null }]);
+        [{ appId: 'a.desktop', displayName: 'A', trackedName: 'A', seconds: 60, children: null }]);
     assertEqual(store.getTotalForDate(todayKey()), 60, 'no total moves');
     assertEqual(store.getOldestDate(), todayKey(),
         'a day left with nothing in it is dropped too');
@@ -383,8 +383,8 @@ test('load: a file written by the current version loads unchanged', async () => 
         },
     });
     assertEqual(store.getUsageForDate(today), [
-        { appId: 'a.desktop', displayName: 'A', seconds: 120, children: null },
-        { appId: 'b.desktop', displayName: 'B', seconds: 30, children: null },
+        { appId: 'a.desktop', displayName: 'A', trackedName: 'A', seconds: 120, children: null },
+        { appId: 'b.desktop', displayName: 'B', trackedName: 'B', seconds: 30, children: null },
     ]);
     // Adding a sub-path to a flat node grows children in place.
     store.addTime(['a.desktop', 'x'], ['A', 'x'], 10);
