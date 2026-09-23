@@ -817,21 +817,20 @@ export class TimesheetWindow {
             }
         };
 
-        // An arrow that moves this time to `target`, with the exact time in
-        // its tooltip and an Undo on the toast that confirms it.
-        let snap = (icon, target, tooltip) => {
+        // An arrow that snaps this time to `target` - `what` names it, e.g.
+        // "end of previous session" - with the exact time in its tooltip and
+        // an Undo on the toast that confirms it.
+        let snap = (icon, target, what) => {
             let button = new Gtk.Button({
                 icon_name: icon,
                 css_classes: ['flat'],
                 valign: Gtk.Align.CENTER,
-                tooltip_text: tooltip,
+                tooltip_text: `Snap to ${what} (${clockOf(target)})`,
             });
             button.connect('clicked', () => {
                 let before = current;
-                if (!apply(target))
-                    return;
-                let label = which === 'start' ? 'Started' : 'Ended';
-                this._toastUndo(`${label} at ${clockOf(target)}`, () => apply(before));
+                if (apply(target))
+                    this._toastUndo(`Snapped to ${what}`, () => apply(before));
             });
             return button;
         };
@@ -842,19 +841,16 @@ export class TimesheetWindow {
         if (which === 'start') {
             let previousEnd = this._previousEndFor(session);
             if (previousEnd !== null && previousEnd < session.startMs) {
-                earlier = snap('go-previous-symbolic', previousEnd,
-                    `Start at ${clockOf(previousEnd)}, when the previous session ended`);
+                earlier = snap('go-previous-symbolic', previousEnd, 'end of previous session');
             }
             let firstActivity = evidence.firstActivityMs ?? null;
             if (firstActivity !== null && firstActivity > session.startMs) {
-                later = snap('go-next-symbolic', firstActivity,
-                    `Start at ${clockOf(firstActivity)}, the first activity recorded`);
+                later = snap('go-next-symbolic', firstActivity, 'first activity');
             }
         } else {
             let nextStart = this._nextStartFor(session);
             if (nextStart !== null && nextStart > session.endMs) {
-                later = snap('go-next-symbolic', nextStart,
-                    `End at ${clockOf(nextStart)}, when the next session started`);
+                later = snap('go-next-symbolic', nextStart, 'start of next session');
             }
         }
 
