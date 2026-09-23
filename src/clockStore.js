@@ -43,7 +43,7 @@ function newId() {
 // module should set. Unknown keys are dropped silently rather than
 // rejected, since a future, harmless field added to a payload should not
 // make the whole call fail.
-const UPDATABLE_FIELDS = ['billedHours', 'description', 'startMs', 'endMs', 'client'];
+const UPDATABLE_FIELDS = ['billedHours', 'description', 'startMs', 'endMs', 'client', 'project'];
 
 function isFiniteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value);
@@ -115,6 +115,10 @@ function isValidField(key, value) {
         return typeof value === 'boolean';
     case 'exportedAt':
         return value === null || isValidTimestamp(value);
+    case 'project':
+        // null is General; a named project follows the client name rules.
+        return value === null || (typeof value === 'string' &&
+            value.trim().length > 0 && value.length <= MAX_CLIENT_LENGTH);
     default:
         return true;
     }
@@ -146,7 +150,7 @@ function shiftDayKey(dayKey, deltaDays) {
 // tolerated when absent and default below; everything else is required.
 const REQUIRED_RECORD_FIELDS =
     ['id', 'client', 'dayKey', 'startMs', 'endMs', 'lastSeenMs', 'billedHours', 'description'];
-const OPTIONAL_RECORD_FIELDS = ['interrupted', 'cleanStop', 'exportedAt'];
+const OPTIONAL_RECORD_FIELDS = ['interrupted', 'cleanStop', 'exportedAt', 'project'];
 
 function isValidSessionRecord(record) {
     if (typeof record !== 'object' || record === null)
@@ -175,6 +179,7 @@ function normalizeSessionRecord(record) {
     return {
         id: record.id,
         client: record.client,
+        project: record.project ?? null,
         dayKey: record.dayKey,
         startMs: record.startMs,
         endMs: record.endMs,
@@ -453,13 +458,17 @@ export class ClockStore {
 
     // `resume: false` always opens a new session. The Trim sleep and Trim
     // away time actions pass it, because they close a session and restart
-    // the same client precisely to leave the gap out.
-    start(client, nowMs = Date.now(), { resume = true } = {}) {
+    // the same client precisely to leave the gap out. A different project
+    // of the same client closes the running session and opens a new one,
+    // exactly like switching to a different client.
+    start(client, nowMs = Date.now(), { resume = true, project = null } = {}) {
         // Same rule update() applies to `client`: reached over D-Bus as
         // StartSession(client), so this can be anything JSON can carry,
         // including "" or whitespace. Checked first, before anything else,
         // so a rejected call never touches the store.
         if (!isValidField('client', client))
+            throw new Error('invalid');
+        if (!isValidField('project', project))
             throw new Error('invalid');
         // A machine whose clock is wrong (a dead CMOS battery booting into
         // 1970, say) can hand Date.now() itself a nonsensical value. This
@@ -469,7 +478,7 @@ export class ClockStore {
             throw new Error('invalid');
 
         let current = this.running;
-        if (current && current.client === client)
+        if (current && current.client === client && current.project === project)
             return current;
 
         // Build the incoming session fully before mutating anything: if this
@@ -479,6 +488,7 @@ export class ClockStore {
         let session = {
             id: newId(),
             client,
+            project,
             dayKey: dateKey(
                 GLib.DateTime.new_from_unix_local(nowMs / 1000), this._dayStartHour()),
             startMs: nowMs,
@@ -495,7 +505,7 @@ export class ClockStore {
             this._close(current, nowMs);
         // After closing `current`, so a switch away that lasted under a
         // minute has already been dropped as noise and is not in the way.
-        let previous = resume ? this._resumable(client, session.dayKey, nowMs) : null;
+        let previous = resume ? this._resumable(client, project, session.dayKey, nowMs) : null;
         if (previous) {
             previous.endMs = null;
             previous.lastSeenMs = nowMs;
@@ -508,19 +518,19 @@ export class ClockStore {
     }
 
     // The session start() continues instead of opening a new one, or null.
-    // It must be `client`'s own, closed by a normal stop less than
-    // RESUME_WITHIN_MS before `nowMs`, on the same day, and the newest
-    // session in the store, so reopening it can never overlap another. It is
-    // never one that has been exported (its exported hours must not change),
-    // carries an hours override (that would hide the new running time), or
-    // was closed by a crash or shutdown rather than a stop.
-    _resumable(client, dayKey, nowMs) {
+    // It must be `client`'s own, on the same project, closed by a normal
+    // stop less than RESUME_WITHIN_MS before `nowMs`, on the same day, and
+    // the newest session in the store, so reopening it can never overlap
+    // another. It is never one that has been exported (its exported hours
+    // must not change), carries an hours override (that would hide the new
+    // running time), or was closed by a crash or shutdown rather than a stop.
+    _resumable(client, project, dayKey, nowMs) {
         let latest = null;
         for (let s of this._sessions) {
             if (!latest || s.startMs > latest.startMs)
                 latest = s;
         }
-        if (!latest || latest.client !== client || latest.endMs === null)
+        if (!latest || latest.client !== client || latest.project !== project || latest.endMs === null)
             return null;
         let gap = nowMs - latest.endMs;
         if (gap < 0 || gap >= RESUME_WITHIN_MS)
@@ -878,6 +888,21 @@ export class ClockStore {
             byClient.set(session.client, (byClient.get(session.client) ?? 0) + seconds);
         }
         return byClient;
+    }
+
+    // One client's billed seconds today per project (null for General), by
+    // the same rule as billedSecondsByClient, so the popup's project rows
+    // always add up to their client row.
+    billedSecondsByProject(dayKey, client, nowMs = Date.now()) {
+        let runningId = this.running?.id ?? null;
+        let byProject = new Map();
+        for (let session of this.sessionsForDay(dayKey)) {
+            if (session.client !== client)
+                continue;
+            let seconds = this._sessionSeconds(session, nowMs, runningId);
+            byProject.set(session.project, (byProject.get(session.project) ?? 0) + seconds);
+        }
+        return byProject;
     }
 
     // Drops the store without closing the running session, which is what a
