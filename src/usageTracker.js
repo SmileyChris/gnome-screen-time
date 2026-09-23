@@ -4,6 +4,7 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
 import { ActivitySourceRegistry } from './activitySources.js';
+import { splitWindowClass } from './windowClass.js';
 
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
@@ -231,6 +232,12 @@ export class UsageTracker {
         // WM_CLASS is stable across launches, so key those off it instead.
         if (app.is_window_backed()) {
             let wmClass = win.get_wm_class();
+            // A reverse-DNS class is keyed on its app family and named from
+            // it, rather than shown raw; WindowClassSource adds the rest as
+            // the activity.
+            let split = splitWindowClass(wmClass);
+            if (split)
+                return { id: `wmclass:${split.appClass}`, name: split.appName, win };
             if (wmClass)
                 return { id: `wmclass:${wmClass}`, name: app.get_name() || wmClass, win };
             // No .desktop file and no WM_CLASS: nothing stable to key on, and
