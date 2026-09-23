@@ -90,7 +90,15 @@ function sessionTimes(session) {
     return times;
 }
 
-// What the subtitle still carries: only the flags, empty for most rows.
+// A collapsed row's subtitle: the note, so it stays readable without
+// opening the row, then any flags. Open, the Note field shows the note, so
+// the subtitle drops back to the flags alone.
+function sessionSubtitle(session, expanded) {
+    let note = expanded ? '' : session.description.trim();
+    return [note, sessionFlags(session)].filter(Boolean).join(' · ');
+}
+
+// The flags the subtitle carries, empty for most rows.
 function sessionFlags(session) {
     let flags = [];
     if (session.interrupted)
@@ -589,8 +597,14 @@ export class TimesheetWindow {
     // shutdown whose 'shutdown' handler didn't run in time.
     _sessionRow(session) {
         let row = new Adw.ExpanderRow({
+            // Notes, client and project names are free text, not Pango
+            // markup. Set first: properties apply in order, and a title or
+            // subtitle set before this would still be parsed as markup.
+            use_markup: false,
             title: session.project ? `${session.client} · ${session.project}` : session.client,
-            subtitle: sessionFlags(session),
+            subtitle: sessionSubtitle(session, false),
+            // A long note stays on one line.
+            subtitle_lines: 1,
         });
         // Added, not set through css_classes: that would replace the row's
         // own "expander" class, which is what turns its arrow when opened.
@@ -614,6 +628,7 @@ export class TimesheetWindow {
         // would otherwise mean a month of range queries to draw one list.
         let loaded = false;
         row.connect('notify::expanded', () => {
+            row.subtitle = sessionSubtitle(session, row.expanded);
             if (row.expanded)
                 this._expandedIds.add(session.id);
             else
