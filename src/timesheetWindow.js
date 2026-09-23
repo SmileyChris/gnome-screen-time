@@ -1,6 +1,7 @@
 import Adw from 'gi://Adw?version=1';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Gdk from 'gi://Gdk?version=4.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 
@@ -178,6 +179,16 @@ export class TimesheetWindow {
         } catch (e) {
             proxyError = e;
         }
+
+        // Session rows carry one line of text, so their header drops the
+        // two-line row height libadwaita gives every row.
+        let css = new Gtk.CssProvider();
+        css.load_from_string(
+            'row.session-row > box > list > row.header { min-height: 0; }' +
+            'row.session-row > box > list > row.header > box.header ' +
+            '{ min-height: 0; padding-top: 4px; padding-bottom: 4px; }');
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         this.window = new Adw.ApplicationWindow({
             application: app,
@@ -534,8 +545,12 @@ export class TimesheetWindow {
         let row = new Adw.ExpanderRow({
             title: session.project ? `${session.client} · ${session.project}` : session.client,
             subtitle: sessionFlags(session),
-            css_classes: session.exportedAt ? ['dim-label'] : [],
         });
+        // Added, not set through css_classes: that would replace the row's
+        // own "expander" class, which is what turns its arrow when opened.
+        row.add_css_class('session-row');
+        if (session.exportedAt)
+            row.add_css_class('dim-label');
         let times = new Gtk.Label({
             label: sessionTimes(session),
             css_classes: ['dim-label', 'numeric'],
