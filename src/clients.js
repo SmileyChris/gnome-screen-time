@@ -66,3 +66,54 @@ export function recentClients(settings, clock, dayKey, min = 4) {
     }
     return names;
 }
+
+// Projects are optional subdivisions of a client, named to match the
+// invoicing app's projects. Stored as two maps keyed by client name, so a
+// client with none has no entry at all and `clients` keeps its shape. A
+// session with no project is the client's General time; "General" itself
+// is never stored.
+function readMap(settings, key) {
+    return settings.get_value(key).deepUnpack();
+}
+
+function writeMap(settings, key, map) {
+    settings.set_value(key, new GLib.Variant('a{sas}', map));
+}
+
+export function readProjects(settings, client) {
+    let inactive = new Set(readMap(settings, 'inactive-projects')[client] ?? []);
+    return (readMap(settings, 'projects')[client] ?? [])
+        .map(name => ({ name, active: !inactive.has(name) }));
+}
+
+// An empty list removes the client from both maps, which is also how a
+// deleted client's projects are dropped.
+export function writeProjects(settings, client, list) {
+    let all = readMap(settings, 'projects');
+    let inactive = readMap(settings, 'inactive-projects');
+    let off = list.filter(p => !p.active).map(p => p.name);
+    if (list.length > 0)
+        all[client] = list.map(p => p.name);
+    else
+        delete all[client];
+    if (off.length > 0)
+        inactive[client] = off;
+    else
+        delete inactive[client];
+    writeMap(settings, 'projects', all);
+    writeMap(settings, 'inactive-projects', inactive);
+}
+
+export function activeProjects(settings, client) {
+    return readProjects(settings, client).filter(p => p.active).map(p => p.name);
+}
+
+// The project resume and the shortcut restart for `client`: last-project
+// when it is still on that client's list, active or not (like
+// isKnownClient), otherwise null, which is General.
+export function lastProject(settings, client) {
+    let name = settings.get_string('last-project');
+    if (!name)
+        return null;
+    return readProjects(settings, client).some(p => p.name === name) ? name : null;
+}

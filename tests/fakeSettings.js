@@ -3,7 +3,8 @@ import GLib from 'gi://GLib';
 // Just enough of Gio.Settings for the modules under test: integer reads,
 // `changed::<key>` signals that a test can fire by hand, the `app-limits`
 // dictionary, the variant-typed keys clients.js reads and writes (`clients`,
-// a(sbb), and `last-client`, s), and the booleans panelMode.js's migration
+// a(sbb), `projects` and `inactive-projects` (both a{sas}), `last-client`
+// and `last-project` (both s)), and the booleans panelMode.js's migration
 // reads and writes. Defaults mirror the schema's.
 export class FakeSettings {
     constructor(ints = {}, appLimits = {}) {
@@ -15,8 +16,10 @@ export class FakeSettings {
             clients: new GLib.Variant('a(sbb)', []),
             'app-limits': new GLib.Variant('a{si}', appLimits),
             'app-names': new GLib.Variant('a{ss}', {}),
+            projects: new GLib.Variant('a{sas}', {}),
+            'inactive-projects': new GLib.Variant('a{sas}', {}),
         };
-        this._strings = { 'last-client': '', 'panel-time': 'client-or-screen' };
+        this._strings = { 'last-client': '', 'last-project': '', 'panel-time': 'client-or-screen' };
         this._booleans = { 'show-total-in-panel': true, 'panel-time-migrated': false };
         // Keys written since construction, for get_user_value().
         this._userSet = new Set();

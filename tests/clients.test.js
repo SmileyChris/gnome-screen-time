@@ -2,7 +2,7 @@ import GLib from 'gi://GLib';
 import { test, assert, assertEqual } from './harness.js';
 import { FakeSettings } from './fakeSettings.js';
 import { ClockStore, CLOCK_FILE } from '../src/clockStore.js';
-import { readClients, writeClients, activeClients, recentClients, isKnownClient, pausedClient } from '../src/clients.js';
+import { readClients, writeClients, activeClients, recentClients, isKnownClient, pausedClient, readProjects, writeProjects, activeProjects, lastProject } from '../src/clients.js';
 
 function at(y, mo, d, h, mi = 0) {
     return GLib.DateTime.new_local(y, mo, d, h, mi, 0).to_unix() * 1000;
@@ -242,4 +242,41 @@ test('clients: recentClients lists a client clocked today that has since been ma
     let names = recentClients(settings, clock, '2026-09-11', 2);
     assertEqual(names, ['GHOST', 'ACME'], 'GHOST has time today and must lead, though it is now inactive');
     clock.destroy();
+});
+
+// --- readProjects ---
+
+test('projects: a client with none reads as []', () => {
+    assertEqual(readProjects(new FakeSettings(), 'ACME'), []);
+});
+
+test('projects: writeProjects round-trips order and active state', () => {
+    let settings = new FakeSettings();
+    writeProjects(settings, 'ACME', [
+        { name: 'Site', active: true }, { name: 'App', active: false },
+    ]);
+    assertEqual(readProjects(settings, 'ACME'),
+        [{ name: 'Site', active: true }, { name: 'App', active: false }]);
+    assertEqual(activeProjects(settings, 'ACME'), ['Site']);
+    assertEqual(readProjects(settings, 'BETA'), [], 'other clients are untouched');
+});
+
+test('projects: an empty list drops the client from both keys', () => {
+    let settings = new FakeSettings();
+    writeProjects(settings, 'ACME', [{ name: 'App', active: false }]);
+    writeProjects(settings, 'ACME', []);
+    assertEqual(settings.get_value('projects').deepUnpack(), {});
+    assertEqual(settings.get_value('inactive-projects').deepUnpack(), {});
+});
+
+test('projects: lastProject only names a project still on the client\'s list', () => {
+    let settings = new FakeSettings();
+    writeProjects(settings, 'ACME', [{ name: 'Site', active: false }]);
+    settings.set_string('last-project', 'Site');
+    assertEqual(lastProject(settings, 'ACME'), 'Site', 'inactive still resumes');
+    assertEqual(lastProject(settings, 'BETA'), null, 'not BETA\'s project');
+    settings.set_string('last-project', 'Gone');
+    assertEqual(lastProject(settings, 'ACME'), null);
+    settings.set_string('last-project', '');
+    assertEqual(lastProject(settings, 'ACME'), null, '"" is General');
 });
