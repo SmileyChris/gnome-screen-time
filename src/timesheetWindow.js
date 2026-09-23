@@ -14,7 +14,7 @@ import { INTERFACE_XML } from './clockDBus.js';
 // can be unit-tested directly rather than only ever exercised through this
 // GTK-dependent window.
 import { parseClock } from './clockTime.js';
-import { HoursBinding, saveFields } from './timesheetDraft.js';
+import { HoursBinding } from './timesheetDraft.js';
 import { dayHeading } from './timesheetSummary.js';
 import { buildClientsPage } from './clientsPage.js';
 import { readProjects } from './clients.js';
@@ -53,13 +53,6 @@ function activityLine(name, seconds, depth) {
 // gets this right by construction.
 function hasBilledHours(session) {
     return session.billedHours !== null && session.billedHours !== undefined;
-}
-
-// Whether keyboard focus is on widget or anything inside it. A SpinButton's
-// focus sits on its internal text entry, so has_focus alone would miss it.
-function hasFocusWithin(widget) {
-    let focus = widget.get_root()?.get_focus() ?? null;
-    return focus !== null && (focus === widget || focus.is_ancestor(widget));
 }
 
 function hoursOf(session) {
@@ -236,14 +229,21 @@ export class TimesheetWindow {
         // refresh() tears down and rebuilds every row from the server's
         // copy, so anything the user typed or bumped but hasn't saved yet
         // would otherwise vanish under an unrelated ClockChanged (starting
-        // a clock from the panel, another session's Save). Both are owned
-        // by the window, not by the widgets they seed, and survive the
-        // rebuild: _drafts carries unsaved edits per session id, and
+        // a clock from the panel, another session's field saving itself).
+        // Both are owned by the window, not by the widgets they seed, and
+        // survive the rebuild: _drafts carries unsaved edits per session id, and
         // _expandedIds carries which rows should come back open, and
         // _activitiesOpen which of their Activities blocks.
         this._drafts = new Map();
         this._expandedIds = new Set();
         this._activitiesOpen = new Set();
+        // Which editable field (if any) has keyboard focus when a rebuild
+        // starts, keyed by "<session id>:<field>" - see _registerFocusField,
+        // _focusedFieldKey and _restoreFocus. Every field that can save
+        // itself now does so on Enter or on losing focus (there is no Save
+        // button any more), so a rebuild triggered by the very save the
+        // person just made must not be what yanks focus out from under them.
+        this._focusFields = new Map();
         // session id -> live-row bookkeeping for _tickLive(), rebuilt by
         // refresh() on every pass (see there) since the rows themselves are
         // rebuilt too. Ticked on its own timer, independent of ClockChanged
@@ -382,7 +382,7 @@ export class TimesheetWindow {
     // cached, so the window doesn't need its own day-rollover timer to
     // notice midnight passing while it's open.
     //
-    // ClockChanged fires on every Save and "Use actual" now, and this method
+    // ClockChanged fires on every self-save and "Use actual" now, and this method
     // makes a blocking call in the middle of rebuilding _groups; a second,
     // overlapping refresh() would duplicate day groups. A refresh requested
     // while one is already running is not dropped, though - it is the one
@@ -396,6 +396,11 @@ export class TimesheetWindow {
             return;
         }
         this._refreshing = true;
+        // Every field saves itself and can trigger this very rebuild (see
+        // the constructor's comment on _focusFields), so whichever one the
+        // person is sitting in has to be found now, before it is torn down
+        // below - get_focus() can no longer answer this once it's gone.
+        let focusedKey = this._focusedFieldKey();
         try {
             for (let group of this._groups.splice(0))
                 this._page.remove(group);
@@ -404,6 +409,7 @@ export class TimesheetWindow {
             // that no longer exist - _sessionRow()/_adjustRows() repopulate
             // this for whatever is still running.
             this._liveRows.clear();
+            this._focusFields.clear();
 
             let to = Date.now();
             let now = GLib.DateTime.new_now_local();
@@ -479,7 +485,50 @@ export class TimesheetWindow {
             // A refresh that lands before the scroll rebuilt the groups;
             // aim at the new ones.
             this._scrollToPendingDaySoon();
+            // Rows that were expanded re-fetch their evidence synchronously
+            // as they're rebuilt above (_sessionRow re-expands them, which
+            // fires _fillEvidence inline), so the field named by focusedKey
+            // already exists again by this point if it's coming back at all.
+            this._restoreFocus(focusedKey);
         }
+    }
+
+    // Notes `widget` as the thing to refocus after a rebuild if it's the one
+    // that currently has focus - called as each editable field is built, so
+    // _focusedFieldKey()/_restoreFocus() (both above, in refresh()) never
+    // have to know each row's shape, only its session id and field name.
+    _registerFocusField(session, field, widget) {
+        this._focusFields.set(`${session.id}:${field}`, widget);
+    }
+
+    // The "<session id>:<field>" key of whichever registered field currently
+    // holds keyboard focus, or null. is_ancestor() rather than a plain
+    // equality check because a SpinButton's own focus sits on an internal
+    // text widget, not the SpinButton itself.
+    _focusedFieldKey() {
+        let focus = this.window.get_focus();
+        if (!focus)
+            return null;
+        for (let [key, widget] of this._focusFields) {
+            if (focus === widget || focus.is_ancestor(widget))
+                return key;
+        }
+        return null;
+    }
+
+    // Hands focus back to `key`'s field once the rebuild that scattered
+    // _focusFields has repopulated it - a no-op if that field didn't come
+    // back at all (its session scrolled out of the fetched window, or its
+    // row is no longer expanded).
+    _restoreFocus(key) {
+        if (!key)
+            return;
+        let widget = this._focusFields.get(key);
+        if (!widget)
+            return;
+        widget.grab_focus();
+        if (widget.set_position)
+            widget.set_position(-1);
     }
 
     // Scrolls so `dayKey`'s heading sits at the top of the list, for the
@@ -561,13 +610,15 @@ export class TimesheetWindow {
         // figures go stale between refreshes (nothing mutates the clock
         // just because time passes, so nothing fires ClockChanged to
         // trigger a refresh() on its own), so only these get an entry.
-        // clockLabel/hours/draft start null and are filled in by
+        // clockLabel/draft start null and are filled in by
         // _fillEvidence()/_adjustRows() below once the row is actually
-        // expanded - until then there is nothing more for a tick to
-        // update than the subtitle already covers.
+        // expanded - until then there is nothing more for a tick to update
+        // than the subtitle already covers. A running session's Bill is
+        // read-only (see _adjustRows), so there is no spin button for a
+        // tick to keep in step - only the heading, via clockLabel.
         let live = null;
         if (session.endMs === null) {
-            live = { session, row, times, clockLabel: null, hours: null, draft: null };
+            live = { session, row, times, clockLabel: null, draft: null };
             this._liveRows.set(session.id, live);
         }
 
@@ -631,9 +682,7 @@ export class TimesheetWindow {
         if (live)
             live.draft = draft;
 
-        row.add_row(this._timeRow(session, evidence, draft, 'start'));
-        if (session.endMs !== null)
-            row.add_row(this._timeRow(session, evidence, draft, 'end'));
+        row.add_row(this._timeRow(session, evidence, draft));
 
         let projectRow = this._projectRow(session);
         if (projectRow)
@@ -648,33 +697,74 @@ export class TimesheetWindow {
         row.add_row(noteRow);
     }
 
-    // Epoch ms -> "HH:MM" and back, resolved against the session's own day so
-    // typing 09:15 cannot silently move the session to today.
+    // Started and Ended on one line: two Adw.EntryRows for what's each just
+    // a few characters of HH:MM spent twice the vertical space the values
+    // need. A still-running session (no Ended yet anyway) shows its start
+    // as plain, read-only text rather than an editable entry - it can still
+    // move later (a snap once the session stops, another client's edit), so
+    // editing it is only offered once the session has actually stopped.
+    _timeRow(session, evidence, draft) {
+        let box = new Gtk.Box({
+            spacing: 6,
+            margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
+        });
+        let running = session.endMs === null;
+
+        box.append(new Gtk.Label({
+            label: 'Started', css_classes: ['caption', 'dim-label'], valign: Gtk.Align.CENTER,
+        }));
+        if (running) {
+            box.append(new Gtk.Label({
+                label: clockOf(session.startMs), valign: Gtk.Align.CENTER,
+            }));
+        } else {
+            this._timeField(box, session, evidence, draft, 'start');
+        }
+
+        if (!running) {
+            box.append(new Gtk.Box({ hexpand: true }));
+            box.append(new Gtk.Label({
+                label: 'Ended', css_classes: ['caption', 'dim-label'], valign: Gtk.Align.CENTER,
+            }));
+            this._timeField(box, session, evidence, draft, 'end');
+        }
+
+        return new Adw.PreferencesRow({ activatable: false, child: box });
+    }
+
+    // Appends one editable HH:MM entry (plus, for "start", its Snap
+    // buttons) to `box` - the part of _timeRow a running session skips
+    // entirely for "start", since it never has an "end" to skip it for.
     //
     // Backed by `draft` (see _draftFor) rather than the session directly:
-    // text the user has typed but not yet applied (no Enter pressed yet)
+    // text the user has typed but not yet sent (no Enter or focus-out yet)
     // must survive a refresh the same way the Note field's unsaved text
-    // does, since ClockChanged - fired by Save, "Use actual", or any other
-    // client mutating the clock, including from the panel or the Shell's
-    // own toggle-clock shortcut, but NOT by the clock's own 30s heartbeat,
-    // which never touches onChange at all - can rebuild this row at any
-    // time.
-    _timeRow(session, evidence, draft, which) {
+    // does, since ClockChanged - fired by any field saving itself, "Use
+    // actual", or any other client mutating the clock, including from the
+    // panel or the Shell's own toggle-clock shortcut, but NOT by the
+    // clock's own 30s heartbeat, which never touches onChange at all - can
+    // rebuild this row at any time.
+    //
+    // There is no Save button here: this entry saves itself, on Enter
+    // (`activate`) and on losing focus, but only when there's something to
+    // send - the field is dirty AND its parsed value actually differs from
+    // the session's current one - so tabbing through an untouched field
+    // never fires a pointless UpdateSession round trip.
+    _timeField(box, session, evidence, draft, which) {
         let draftKey = which === 'start' ? 'start' : 'end';
         let dirtyKey = which === 'start' ? 'startDirty' : 'endDirty';
         let current = which === 'start' ? session.startMs : session.endMs;
 
-        let row = new Adw.EntryRow({
-            title: which === 'start' ? 'Started' : 'Ended',
-        });
+        let entry = new Gtk.Entry({ width_chars: 6, valign: Gtk.Align.CENTER });
         // Seeded from the draft, then the dirty-tracking handler is
         // connected - same ordering as _adjustRows's Note/Bill fields, so
         // seeding this text never itself marks the field dirty.
-        row.text = draft[draftKey];
-        row.connect('notify::text', () => {
-            draft[draftKey] = row.text;
+        entry.text = draft[draftKey];
+        entry.connect('notify::text', () => {
+            draft[draftKey] = entry.text;
             draft[dirtyKey] = true;
         });
+        this._registerFocusField(session, which, entry);
 
         let apply = ms => {
             let fields = which === 'start' ? { startMs: ms } : { endMs: ms };
@@ -698,14 +788,22 @@ export class TimesheetWindow {
             }
         };
 
-        row.connect('apply', () => {
-            let ms = parseClock(row.text, current ?? session.startMs);
+        let commit = () => {
+            if (!draft[dirtyKey])
+                return;
+            let ms = parseClock(entry.text, current ?? session.startMs);
             if (ms === null) {
                 this._toast('Enter a time as HH:MM.');
                 return;
             }
-            apply(ms);
-        });
+            if (ms !== current)
+                apply(ms);
+        };
+        entry.connect('activate', commit);
+        let focus = new Gtk.EventControllerFocus();
+        focus.connect('leave', commit);
+        entry.add_controller(focus);
+        box.append(entry);
 
         if (which === 'start') {
             let firstActivity = evidence.firstActivityMs ?? null;
@@ -717,7 +815,7 @@ export class TimesheetWindow {
                     tooltip_text: 'Move the start to the first activity recorded in this session.',
                 });
                 snap.connect('clicked', () => apply(firstActivity));
-                row.add_suffix(snap);
+                box.append(snap);
             }
             let previousEnd = this._previousEndFor(session);
             if (previousEnd !== null && previousEnd !== session.startMs) {
@@ -728,10 +826,9 @@ export class TimesheetWindow {
                     tooltip_text: 'Start where the previous session ended.',
                 });
                 butt.connect('clicked', () => apply(previousEnd));
-                row.add_suffix(butt);
+                box.append(butt);
             }
         }
-        return row;
     }
 
     // The end of the latest session that finished at or before this one
@@ -769,6 +866,10 @@ export class TimesheetWindow {
             title: 'Project',
             model: Gtk.StringList.new(choices.map(p => p ?? 'General')),
             selected: choices.indexOf(current),
+            // A running session's client/project pairing can still change
+            // from the panel while it's on the clock, so this is read-only
+            // until it stops - same reasoning as Started/Bill, above.
+            sensitive: session.endMs !== null,
         });
         row.connect('notify::selected', () => {
             let chosen = choices[row.selected];
@@ -830,10 +931,10 @@ export class TimesheetWindow {
     //
     // A draft is created empty on a row's first expansion and would
     // otherwise keep whatever it was first seeded with forever: refresh()
-    // rebuilds this row from scratch on every ClockChanged - fired on every
-    // Save, "Use actual", and any other client mutating the clock, but
-    // never by the clock's own 30s heartbeat, which does not touch
-    // onChange - and an untouched field must track the session, not freeze
+    // rebuilds this row from scratch on every ClockChanged - fired whenever
+    // a field saves itself, by "Use actual", and by any other client
+    // mutating the clock, but never by the clock's own 30s heartbeat, which
+    // does not touch onChange - and an untouched field must track the session, not freeze
     // at its first-render value. That alone is not enough for a session
     // that is still running, though: nothing mutates the clock (so nothing
     // fires ClockChanged, so refresh() never runs) just because time keeps
@@ -873,146 +974,181 @@ export class TimesheetWindow {
     // widgets themselves: refresh() rebuilds this row from scratch on every
     // ClockChanged, so anything typed or bumped but not yet saved must
     // survive that rebuild rather than being seeded back to the server's
-    // last-saved values.
+    // last-saved values. Neither has a Save button - each saves itself, on
+    // Enter or on losing focus - so the dirty flags below double as the
+    // guard against sending the same edit twice.
+    //
+    // A running session (no endMs yet) shows its Bill read-only: its hours
+    // change under you every tick (see _tickLive), so there is nothing
+    // sensible to bill until it stops. Its Note is still fully editable -
+    // unlike the hours, a note can be written at any time.
     _adjustRows(session, evidence, draft, live) {
+        let running = session.endMs === null;
+
         let noteRow = new Adw.EntryRow({ title: 'Note' });
         // Starts from the session's saved note only, never from the
         // activities above: those are repository names, hostnames and
         // subreddits, not something to put on an invoice.
         noteRow.text = draft.note;
-
-        let hours = new Gtk.SpinButton({
-            adjustment: new Gtk.Adjustment({
-                // 24 would clamp a clock left running over a weekend to
-                // "24.00 h", and Save would then write that ceiling as
-                // billedHours - permanently discarding the true value.
-                lower: 0, upper: 999, step_increment: 0.25, page_increment: 1,
-                value: draft.hours,
-            }),
-            digits: 2,
-            valign: Gtk.Align.CENTER,
-        });
-
-        // Connected after both widgets are seeded from the draft above, so
+        // Connected after the row is seeded from the draft above, so
         // restoring a draft (or seeding a fresh one) never itself marks
         // anything dirty - only an edit the user makes here does.
         noteRow.connect('notify::text', () => {
             draft.note = noteRow.text;
             draft.noteDirty = true;
         });
-        // The Bill control's edits go through HoursBinding, which tells a
-        // person's change apart from _tickLive()'s own refresh: GTK fires
-        // value-changed for both, and only the first may mark hours edited.
-        let binding = new HoursBinding(hours.adjustment, draft);
-
-        // Renamed from "Reset" and moved away from Save: it sends
-        // billedHours alone (the note is left untouched, since
-        // UpdateSession only touches fields present in the payload), so a
-        // misclick next to Save no longer discards an adjustment with no
-        // way back.
-        let useActual = new Gtk.Button({ label: 'Use actual', css_classes: ['flat'] });
-        useActual.connect('clicked', () => this._updateSession(session, { billedHours: null }));
-
-        let controls = new Gtk.Box({ spacing: 6 });
-        controls.append(useActual);
-        controls.append(hours);
-        for (let [label, delta] of [['¼', 0.25], ['½', 0.5], ['+1', 1]]) {
-            let button = new Gtk.Button({ label, css_classes: ['flat'] });
-            button.connect('clicked', () => { hours.value += delta; });
-            controls.append(button);
-        }
-        let round = new Gtk.Button({ label: 'Round', css_classes: ['flat'] });
-        round.connect('clicked', () => {
-            hours.value = Math.round(hours.value * 4) / 4;
-        });
-        controls.append(round);
-        // Save sits at the far end, well away from "Use actual".
-        controls.append(new Gtk.Box({ hexpand: true }));
-
-        let save = new Gtk.Button({ label: 'Save', css_classes: ['suggested-action'] });
-        save.connect('clicked', () => {
-            // Only what was actually edited: see saveFields.
-            let fields = saveFields(draft, hours.value, noteRow.text);
-            if (Object.keys(fields).length === 0) {
-                this._toast('Nothing to save.');
+        // Saves on Enter (`entry-activated`) and on losing focus, but only
+        // when there's an edit to send - re-sending an unchanged, merely
+        // revisited note on every tab-through would be a pointless round
+        // trip, and a successful _updateSession() call already clears
+        // noteDirty, so a second commit right after (Enter, then the focus
+        // change Enter itself may cause) finds nothing left to send.
+        let saveNote = () => {
+            if (!draft.noteDirty)
                 return;
-            }
-            this._updateSession(session, fields);
-        });
-        controls.append(save);
+            let text = noteRow.text.trim();
+            if (text !== session.description)
+                this._updateSession(session, { description: text });
+        };
+        noteRow.connect('entry-activated', saveNote);
+        let noteFocus = new Gtk.EventControllerFocus();
+        noteFocus.connect('leave', saveNote);
+        noteRow.add_controller(noteFocus);
+        this._registerFocusField(session, 'note', noteRow);
 
-        // Two lines of its own - the heading, then the controls - rather
-        // than an ActionRow suffix, which squeezed the title into a sliver
-        // beside this many controls. The heading matches the Started,
-        // Ended and Note titles.
         let heading = new Gtk.Label({
             label: billHeading(evidence.spanSeconds / 3600),
             xalign: 0,
             css_classes: ['caption', 'dim-label'],
         });
-        let billBox = new Gtk.Box({
-            orientation: Gtk.Orientation.VERTICAL,
-            spacing: 6,
-            margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
-        });
-        billBox.append(heading);
-        billBox.append(controls);
-        let billRow = new Adw.PreferencesRow({ activatable: false, child: billBox });
-
-        // Handed to _tickLive() (only non-null for a still-running
-        // session - see _sessionRow): this heading's "X h on the clock" and
-        // the spin button's value are exactly the two figures that
-        // otherwise freeze at whatever they were on expand, per the class
-        // comment on _draftFor.
-        if (live) {
+        if (live)
             live.clockLabel = heading;
-            live.hours = hours;
-            live.binding = binding;
+
+        let billRow;
+        if (running) {
+            heading.margin_top = 8;
+            heading.margin_bottom = 8;
+            heading.margin_start = 12;
+            heading.margin_end = 12;
+            billRow = new Adw.PreferencesRow({ activatable: false, child: heading });
+        } else {
+            let hours = new Gtk.SpinButton({
+                adjustment: new Gtk.Adjustment({
+                    // 24 would clamp a clock left running over a weekend to
+                    // "24.00 h", and a save would then send that ceiling as
+                    // billedHours - permanently discarding the true value.
+                    lower: 0, upper: 999, step_increment: 0.25, page_increment: 1,
+                    value: draft.hours,
+                }),
+                digits: 2,
+                valign: Gtk.Align.CENTER,
+            });
+            // The Bill control's edits go through HoursBinding, which tells
+            // a person's change apart from _tickLive()'s own refresh: GTK
+            // fires value-changed for both, and only the first may mark
+            // hours edited.
+            let binding = new HoursBinding(hours.adjustment, draft);
+
+            // Saves on Enter and on losing focus, only when there's an
+            // edit to send - same guard, and the same reason, as the Note
+            // field above.
+            let saveHours = () => {
+                if (!draft.hoursDirty)
+                    return;
+                this._updateSession(session, { billedHours: Math.round(hours.value * 100) / 100 });
+            };
+            hours.connect('activate', saveHours);
+            let hoursFocus = new Gtk.EventControllerFocus();
+            hoursFocus.connect('leave', saveHours);
+            hours.add_controller(hoursFocus);
+            this._registerFocusField(session, 'hours', hours);
+
+            // Sends billedHours alone (the note is left untouched, since
+            // UpdateSession only touches fields present in the payload), so
+            // using it never discards an unsaved Note edit. Disabled once
+            // the session is already showing its actual time: there is
+            // nothing left for it to reset.
+            let useActual = new Gtk.Button({
+                label: 'Use actual', css_classes: ['flat'],
+                sensitive: hasBilledHours(session),
+            });
+            useActual.connect('clicked', () => this._updateSession(session, { billedHours: null }));
+
+            let controls = new Gtk.Box({ spacing: 6 });
+            controls.append(useActual);
+            controls.append(hours);
+            for (let [label, delta] of [['¼', 0.25], ['½', 0.5], ['+1', 1]]) {
+                let button = new Gtk.Button({ label, css_classes: ['flat'] });
+                // A discrete click, not typing - it goes through the same
+                // dirty path as typing (HoursBinding marks hoursDirty when
+                // the value changes) and then saves immediately, rather
+                // than waiting for a focus change that may never come.
+                button.connect('clicked', () => {
+                    hours.value += delta;
+                    saveHours();
+                });
+                controls.append(button);
+            }
+            let round = new Gtk.Button({ label: 'Round', css_classes: ['flat'] });
+            round.connect('clicked', () => {
+                hours.value = Math.round(hours.value * 4) / 4;
+                saveHours();
+            });
+            controls.append(round);
+
+            // Two lines of its own - the heading, then the controls -
+            // rather than an ActionRow suffix, which squeezed the title
+            // into a sliver beside this many controls. The heading matches
+            // the Started, Ended and Note titles.
+            let billBox = new Gtk.Box({
+                orientation: Gtk.Orientation.VERTICAL,
+                spacing: 6,
+                margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
+            });
+            billBox.append(heading);
+            billBox.append(controls);
+            billRow = new Adw.PreferencesRow({ activatable: false, child: billBox });
+            // No live.hours/live.binding handoff here: `live` (see
+            // _sessionRow) is only ever set for a still-running session,
+            // and this branch - the editable Bill - only ever runs for one
+            // that has already stopped, so the two never coincide.
         }
 
         return [billRow, noteRow];
     }
 
     // Recomputes every currently-running session's row locally, every
-    // LIVE_TICK_SECONDS, with no D-Bus call at all: hoursOf()/
-    // actualHoursOf() already read Date.now() fresh on every call, so the
-    // numbers that would otherwise freeze at whatever they were on the last
-    // refresh() or expand (see the comments on _timeRow and _draftFor) just
-    // need recomputing and pushing back into the widgets that are already
-    // on screen - the row's times label, an ActionRow subtitle, a spin button's
-    // value - never a rebuild.
+    // LIVE_TICK_SECONDS, with no D-Bus call at all: actualHoursOf() already
+    // reads Date.now() fresh on every call, so the figures that would
+    // otherwise freeze at whatever they were on the last refresh() or
+    // expand (see the comments on _timeRow and _draftFor) just need
+    // recomputing and pushing back into the widgets that are already on
+    // screen - the row's times label and, once expanded, its read-only
+    // Bill heading - never a rebuild. There is no spin button/binding to
+    // keep in step here: a running session's Bill is read-only (see
+    // _adjustRows), since it can't sensibly be billed until it stops.
     _tickLive() {
         for (let live of this._liveRows.values()) {
-            let { session, times, clockLabel, hours, binding, draft } = live;
+            let { session, times, clockLabel } = live;
             times.label = sessionTimes(session);
-            if (!clockLabel || !hours || !binding || !draft)
-                continue;   // not expanded (yet): nothing else to refresh
-            clockLabel.label = billHeading(actualHoursOf(session));
-            // hoursOf() returns the fixed billedHours override unchanged
-            // when one is set, and the live elapsed time otherwise - the
-            // same rule _draftFor() re-seeds an untouched draft with, so a
-            // manual override here is left exactly as billed, not walked
-            // forward every tick.
-            // Through the binding, so this refresh isn't taken for an edit
-            // (setting the value directly fires value-changed, which marked
-            // the hours edited and let a note-only Save pin them), and not
-            // while the person is typing in the control.
-            binding.refresh(hoursOf(session), { focused: hasFocusWithin(hours) });
+            if (clockLabel)
+                clockLabel.label = billHeading(actualHoursOf(session));
         }
     }
 
-    // Shared by Save and "Use actual": both send a partial fields payload
-    // and report a rejection through a toast. A successful update fires
-    // ClockChanged, which rebuilds this row from the server's copy, so only
-    // the dirty flag(s) for the field(s) this call actually wrote are
-    // cleared here - that hands them back to _draftFor to re-seed from the
-    // session on the rebuild. Fields this call did NOT touch (an
-    // un-applied Started/Ended edit sitting in the row while only Save's
-    // Note/Bill fields were sent, say) are left dirty, with their draft
-    // text untouched: deleting the whole draft here, as before adding
-    // Started/Ended, would otherwise discard that unrelated unsaved edit -
-    // exactly what _drafts exists to prevent. A rejected or failed call
-    // leaves every flag as it was, so nothing typed is lost.
+    // Shared by every field that saves itself (Note, Bill/hours), by "Use
+    // actual" and by the Project dropdown: all send a partial fields
+    // payload and report a rejection through a toast. A successful update
+    // fires ClockChanged, which rebuilds this row from the server's copy,
+    // so only the dirty flag(s) for the field(s) this call actually wrote
+    // are cleared here - that hands them back to _draftFor to re-seed from
+    // the session on the rebuild. A field this call did NOT touch (an
+    // unsaved Note edit sitting in the row while only Bill's ¼ button was
+    // clicked, say) is left dirty, with its draft text untouched: clearing
+    // every flag here, rather than just the one(s) this call's fields name,
+    // would otherwise discard that unrelated unsaved edit - exactly what
+    // _drafts exists to prevent. A rejected or failed call leaves every
+    // flag as it was, so nothing typed is lost.
     _updateSession(session, fields) {
         try {
             let [json] = this._proxy.UpdateSessionSync(session.id, JSON.stringify(fields));
