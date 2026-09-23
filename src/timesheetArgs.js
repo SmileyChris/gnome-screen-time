@@ -12,6 +12,14 @@ export function dayArg(dayKey) {
     return `${DAY_PREFIX}${dayKey}`;
 }
 
+// The full argv for launching the Timesheet out of extensionDir, shared by
+// both launch sites (extension.js, prefs.js) so they cannot drift apart.
+export function timesheetArgv(extensionDir, { day = null, clients = false } = {}) {
+    return ['/usr/bin/gjs', '-m', `${extensionDir}/timesheet.js`,
+        ...(day ? [dayArg(day)] : []),
+        ...(clients ? [CLIENTS_ARG] : [])];
+}
+
 // The dayKey a --day=YYYY-MM-DD argument names, or null when there is none
 // or it is not a real date.
 export function dayFromArgs(args) {

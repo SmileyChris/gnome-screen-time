@@ -9,7 +9,7 @@ import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
 import { getAppNames } from './appNames.js';
 import { migratePanelSetting } from './panelMode.js';
-import { CLIENTS_ARG } from './timesheetArgs.js';
+import { timesheetArgv } from './timesheetArgs.js';
 
 const HISTORY_DAYS = 7;
 const CHART_HEIGHT = 110;
@@ -524,9 +524,17 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         const button = new Gtk.Button({ label: 'Open', valign: Gtk.Align.CENTER });
         button.connect('clicked', () => {
             try {
-                Gio.Subprocess.new(['/usr/bin/gjs', '-m',
-                    GLib.build_filenamev([this.path, 'timesheet.js']), CLIENTS_ARG],
-                Gio.SubprocessFlags.NONE);
+                let argv = timesheetArgv(this.path, { clients: true });
+                // A plain Gio.Subprocess carries no activation token, so
+                // Mutter's focus-stealing prevention maps the window without
+                // raising it. Launching through a GAppInfo puts an
+                // xdg-activation token on the command line, which the
+                // Timesheet's GTK app picks up to bring its window forward
+                // instead.
+                let cmd = argv.map(a => GLib.shell_quote(a)).join(' ');
+                let info = Gio.AppInfo.create_from_commandline(cmd, 'Timesheet',
+                    Gio.AppInfoCreateFlags.SUPPORTS_STARTUP_NOTIFICATION);
+                info.launch([], button.get_display().get_app_launch_context());
             } catch (e) {
                 console.error(`[ScreenTime] could not launch the timesheet: ${e.message}`);
             }

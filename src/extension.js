@@ -20,7 +20,7 @@ import { ActivitySourceRegistry, ZellijSource } from './activitySources.js';
 import { BrowserSource } from './browserSource.js';
 import { DbusService } from './dbusService.js';
 import { ClockDBus } from './clockDBus.js';
-import { dayArg, CLIENTS_ARG } from './timesheetArgs.js';
+import { timesheetArgv } from './timesheetArgs.js';
 
 // GNOME Shell caches an extension's ES modules for the life of the Shell
 // process, so module-scoped state survives a disable()/enable() cycle (a
@@ -301,12 +301,16 @@ export default class ScreenTimeExtension extends Extension {
     // timesheet.js).
     _openTimesheet({ day = null, clients = false } = {}) {
         try {
-            let argv = ['/usr/bin/gjs', '-m', GLib.build_filenamev([this.path, 'timesheet.js'])];
-            if (day)
-                argv.push(dayArg(day));
-            if (clients)
-                argv.push(CLIENTS_ARG);
-            Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE);
+            let argv = timesheetArgv(this.path, { day, clients });
+            // A plain Gio.Subprocess carries no activation token, so Mutter's
+            // focus-stealing prevention maps the window without raising it.
+            // Launching through a GAppInfo puts an xdg-activation token on
+            // the command line, which the Timesheet's GTK app picks up to
+            // bring its window forward instead.
+            let cmd = argv.map(a => GLib.shell_quote(a)).join(' ');
+            let info = Gio.AppInfo.create_from_commandline(cmd, 'Timesheet',
+                Gio.AppInfoCreateFlags.SUPPORTS_STARTUP_NOTIFICATION);
+            info.launch([], global.create_app_launch_context(global.get_current_time(), -1));
         } catch (e) {
             console.error(`[ScreenTime] could not launch the timesheet: ${e.message}`);
         }

@@ -15,12 +15,18 @@ GLib.set_prgname('screen-time-timesheet');
 // Preferences does.
 function extensionSettings() {
     let dir = GLib.path_get_dirname(GLib.filename_from_uri(import.meta.url)[0]);
-    let source = Gio.SettingsSchemaSource.new_from_directory(
-        GLib.build_filenamev([dir, 'schemas']),
-        Gio.SettingsSchemaSource.get_default(), false);
+    let schemasDir = GLib.build_filenamev([dir, 'schemas']);
+    // The compiled schema ships in a schemas/ directory beside this file
+    // once installed (`make build`); without one - e.g. GNOME's own schema
+    // install path - fall back to the default source, the way
+    // ExtensionPreferences.getSettings does.
+    let source = GLib.file_test(schemasDir, GLib.FileTest.IS_DIR)
+        ? Gio.SettingsSchemaSource.new_from_directory(
+            schemasDir, Gio.SettingsSchemaSource.get_default(), false)
+        : Gio.SettingsSchemaSource.get_default();
     let schema = source.lookup('org.gnome.shell.extensions.screen-time', false);
     if (!schema)
-        throw new Error(`no compiled schema in ${dir}/schemas (run make build)`);
+        throw new Error(`no compiled schema found in ${schemasDir} or the default schema source (run make build)`);
     return new Gio.Settings({ settings_schema: schema });
 }
 const settings = extensionSettings();
