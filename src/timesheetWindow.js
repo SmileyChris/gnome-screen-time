@@ -596,16 +596,13 @@ export class TimesheetWindow {
     // went away with no clean goodbye at all - a crash, or a logout/
     // shutdown whose 'shutdown' handler didn't run in time.
     _sessionRow(session) {
-        let row = new Adw.ExpanderRow({
-            // Notes, client and project names are free text, not Pango
-            // markup. Set first: properties apply in order, and a title or
-            // subtitle set before this would still be parsed as markup.
-            use_markup: false,
-            title: session.project ? `${session.client} · ${session.project}` : session.client,
-            subtitle: sessionSubtitle(session, false),
-            // A long note stays on one line.
-            subtitle_lines: 1,
-        });
+        // A long note stays on one line.
+        let row = new Adw.ExpanderRow({ use_markup: false, subtitle_lines: 1 });
+        // Notes, client and project names are free text, not Pango markup.
+        // Set after construction: passed to the constructor, they are
+        // parsed as markup before use_markup takes effect.
+        row.title = session.project ? `${session.client} · ${session.project}` : session.client;
+        row.subtitle = sessionSubtitle(session, false);
         // Added, not set through css_classes: that would replace the row's
         // own "expander" class, which is what turns its arrow when opened.
         row.add_css_class('session-row');
