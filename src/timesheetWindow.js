@@ -1092,7 +1092,10 @@ export class TimesheetWindow {
             }
             let round = new Gtk.Button({ label: 'Round', css_classes: ['flat'] });
             round.connect('clicked', () => {
-                hours.value = Math.round(hours.value * 4) / 4;
+                // Up to the next quarter hour, never down. The epsilon keeps
+                // a value already on a quarter (1.25) from float noise
+                // pushing it to the next one.
+                hours.value = Math.ceil(hours.value * 4 - 1e-9) / 4;
                 saveHours();
             });
             controls.append(round);
