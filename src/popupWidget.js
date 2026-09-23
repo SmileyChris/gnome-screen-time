@@ -534,6 +534,19 @@ export class PopupWidget {
         // sessions today the two differ, so a small count after the figure
         // says why. Capped like the title, so it can never widen the card:
         // the count ellipsizes before the figure gives up any room.
+        // A small note button at the card's bottom-right, on the figure's
+        // line so the card keeps its size. It closes the popup and opens
+        // the Timesheet with this session already expanded and its Note
+        // field focused, so a thought that occurs to you here doesn't have
+        // to survive an extra "which session was that" once the Timesheet's
+        // open.
+        let noteButton = noteSessionId !== null
+            ? cardButton('document-edit-symbolic', 'Note', () => {
+                this._menu.close();
+                this._onOpenTimesheet?.({ note: noteSessionId });
+            })
+            : null;
+
         let figureRow = new St.BoxLayout({
             style: `spacing: 5px; max-width: ${Math.round(ROW_W / 2) - 36}px;`,
         });
@@ -554,29 +567,12 @@ export class PopupWidget {
             count.clutter_text.ellipsize = Pango.EllipsizeMode.END;
             figureRow.add_child(count);
         }
-        clock.add_child(figureRow);
-
-        // A small note button at the card's bottom-left, its own row below
-        // the figure so it never shares a line with the title's buttons or
-        // widens the card - capped the same way the figure row is. It
-        // closes the popup and opens the Timesheet with this session
-        // already expanded and its Note field focused, so a thought that
-        // occurs to you here doesn't have to survive an extra "which
-        // session was that" once the Timesheet's open.
-        let noteButton = noteSessionId !== null
-            ? cardButton('document-edit-symbolic', 'Note', () => {
-                this._menu.close();
-                this._onOpenTimesheet?.({ note: noteSessionId });
-            })
-            : null;
         if (noteButton) {
-            let noteRow = new St.BoxLayout({
-                x_align: Clutter.ActorAlign.START,
-                style: `max-width: ${Math.round(ROW_W / 2) - 36}px;`,
-            });
-            noteRow.add_child(noteButton);
-            clock.add_child(noteRow);
+            figureRow.add_child(new St.Widget({ x_expand: true }));
+            noteButton.y_align = Clutter.ActorAlign.END;
+            figureRow.add_child(noteButton);
         }
+        clock.add_child(figureRow);
 
         if (tappable) {
             // Same inline-gradient hover swap as the screen time card.
