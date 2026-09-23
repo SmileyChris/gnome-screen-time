@@ -39,7 +39,7 @@ function longPressMs() {
     }
 }
 
-function addLongPress(actor, onLongPress) {
+export function addLongPress(actor, onLongPress) {
     let state = { pressed: false };
     let timer = 0;
     let cancel = () => {

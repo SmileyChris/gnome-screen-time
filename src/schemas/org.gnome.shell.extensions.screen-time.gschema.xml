@@ -28,9 +28,9 @@
     </key>
     <key name="percent-basis" type="s">
       <choices><choice value="total"/><choice value="largest"/></choices>
-      <default>"total"</default>
+      <default>"largest"</default>
       <summary>What row percentages and bars are relative to</summary>
-      <description>"total" compares each row with its parent's total (the day for apps); "largest" compares with the biggest row at that level, so the top item reads 100%. Toggled by clicking the total card in the popup.</description>
+      <description>"total" compares each row with its parent's total (the day for apps); "largest" compares with the biggest row at that level, so the top item reads 100%. Toggled by long-pressing the Screen Time card in the popup.</description>
     </key>
     <key name="purge-requested" type="i">
       <default>0</default>
