@@ -102,11 +102,12 @@ export function countSkippedUnknown(sessions, clients) {
 // form; with a project it has one more '\0'-separated (':'-separated in
 // external_id) component after the date.
 //
-// A client name may itself contain ':' (e.g. "A:B"); external_id stays
-// unambiguous to parse back because the date is always the fixed-width
-// (YYYY-MM-DD) component — strip the "screen-time:" prefix and the
-// ":YYYY-MM-DD" (and, for a project row, trailing ":<project>") and
-// whatever remains between is the client, colons and all.
+// external_id is an upsert identity only - nothing here or on the receiving
+// side ever parses it back into client/project/date (a client or project
+// name may itself contain ':', e.g. "A:B", which would make that ambiguous
+// anyway). General (no project) rows keep the pre-project form (no trailing
+// ":<project>"), so rows sent before projects existed still match on
+// re-export instead of forking into a new row.
 export function mergeSessions(sessions, clients, nowMs = Date.now()) {
     let byKey = new Map();
 

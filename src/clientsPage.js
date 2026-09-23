@@ -139,7 +139,14 @@ export function buildClientsPage(settings, window) {
                 });
                 pactive.connect('notify::active', () => {
                     let next = readProjects(settings, client.name);
-                    next.find(p => p.name === project.name).active = pactive.active;
+                    // The project may have been removed from settings since
+                    // this row was rendered (e.g. edited via dconf directly)
+                    // - nothing to flip in that case, rather than throwing
+                    // on a null find().
+                    let found = next.find(p => p.name === project.name);
+                    if (!found)
+                        return;
+                    found.active = pactive.active;
                     writeProjects(settings, client.name, next);
                 });
                 row.add_suffix(pactive);
@@ -150,10 +157,9 @@ export function buildClientsPage(settings, window) {
                 });
                 premove.connect('clicked', () => {
                     confirmDelete(window, `Delete ${project.name}?`,
-                        `Sessions already recorded for ${project.name} will no longer be ` +
-                        'exported under it unless the project is added again, even though ' +
-                        'they stay in the Timesheet. Consider turning it inactive instead ' +
-                        '- it drops out of the popup but stays exportable.',
+                        `Sessions already recorded for ${project.name} keep exporting under ` +
+                        'that name, and stay in the Timesheet. Consider turning it inactive ' +
+                        'instead - it drops out of the popup and stays exportable.',
                         () => {
                             let next = readProjects(settings, client.name)
                                 .filter(p => p.name !== project.name);
@@ -169,7 +175,10 @@ export function buildClientsPage(settings, window) {
             let addProjectRow = new Adw.EntryRow({ title: 'Add a project' });
             addProjectRow.connect('entry-activated', () => {
                 let name = addProjectRow.text.trim();
-                if (name.length === 0)
+                // 'General' already means "no project" (see clients.js) -
+                // a project by that name would just be a second, confusing
+                // way to say the same thing.
+                if (name.length === 0 || name === 'General')
                     return;
                 let next = readProjects(settings, client.name);
                 if (next.some(p => p.name === name))

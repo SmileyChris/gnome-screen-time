@@ -729,20 +729,25 @@ export class TimesheetWindow {
     // choose between. Saves on change, like "Use actual", since it is a
     // single choice rather than typed text.
     _projectRow(session) {
+        // A missing project (a session JSON read during a Shell upgrade,
+        // say, saved before this field existed) means General, same as
+        // null - resolved once here so it can never become the literal
+        // string "undefined" among the choices below.
+        let current = session.project ?? null;
         let names = readProjects(this._settings, session.client).map(p => p.name);
-        if (session.project !== null && !names.includes(session.project))
-            names.push(session.project);
+        if (current !== null && !names.includes(current))
+            names.push(current);
         if (names.length === 0)
             return null;
         let choices = [null, ...names];
         let row = new Adw.ComboRow({
             title: 'Project',
             model: Gtk.StringList.new(choices.map(p => p ?? 'General')),
-            selected: choices.indexOf(session.project ?? null),
+            selected: choices.indexOf(current),
         });
         row.connect('notify::selected', () => {
             let chosen = choices[row.selected];
-            if (chosen !== (session.project ?? null))
+            if (chosen !== current)
                 this._updateSession(session, { project: chosen });
         });
         return row;

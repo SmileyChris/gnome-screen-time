@@ -75,6 +75,17 @@ export class ClockSection {
             let pausedHere = name === paused;
             let secs = byClient.get(name) ?? 0;
 
+            // A project that was deactivated or deleted after being clocked
+            // into must still get a row: otherwise, once it's the client's
+            // last such project, the client renders as a plain row and
+            // tapping it calls _tap(name, null), switching to General
+            // instead of pausing or resuming the project actually running
+            // or paused.
+            if (runningHere && running.project !== null && !projects.includes(running.project))
+                projects.push(running.project);
+            if (pausedHere && pausedProject !== null && !projects.includes(pausedProject))
+                projects.push(pausedProject);
+
             if (projects.length === 0) {
                 this._addRow(menu, {
                     text: name, bold: runningHere, depth: 0, secs,
