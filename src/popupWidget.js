@@ -502,13 +502,25 @@ export class PopupWidget {
                 this._build();
             }
         };
-        let cardButton = (iconName, name, onClick) => {
+        // `text`, when given, is shown before the icon.
+        let cardButton = (iconName, name, onClick, text = null) => {
+            let icon = new St.Icon({
+                icon_name: iconName,
+                icon_size: 12,
+                style: `color: ${CARD_FG};`,
+            });
+            let child = icon;
+            if (text) {
+                child = new St.BoxLayout({ style: 'spacing: 4px;' });
+                child.add_child(new St.Label({
+                    text,
+                    y_align: Clutter.ActorAlign.CENTER,
+                    style: `font-size: 10px; color: ${CARD_FG};`,
+                }));
+                child.add_child(icon);
+            }
             let btn = new St.Button({
-                child: new St.Icon({
-                    icon_name: iconName,
-                    icon_size: 12,
-                    style: `color: ${CARD_FG};`,
-                }),
+                child,
                 can_focus: true,
                 accessible_name: name,
                 y_align: Clutter.ActorAlign.CENTER,
@@ -544,7 +556,7 @@ export class PopupWidget {
             ? cardButton('document-edit-symbolic', 'Note', () => {
                 this._menu.close();
                 this._onOpenTimesheet?.({ note: noteSessionId });
-            })
+            }, 'Note')
             : null;
 
         let figureRow = new St.BoxLayout({
