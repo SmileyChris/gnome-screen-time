@@ -90,14 +90,6 @@ function sessionTimes(session) {
     return times;
 }
 
-// A collapsed row's subtitle: the note, so it stays readable without
-// opening the row, then any flags. Open, the Note field shows the note, so
-// the subtitle drops back to the flags alone.
-function sessionSubtitle(session, expanded) {
-    let note = expanded ? '' : session.description.trim();
-    return [note, sessionFlags(session)].filter(Boolean).join(' · ');
-}
-
 // The flags the subtitle carries, empty for most rows.
 function sessionFlags(session) {
     let flags = [];
@@ -184,7 +176,17 @@ export class TimesheetWindow {
         css.load_from_string(
             'row.session-row > box > list > row.header { min-height: 0; }' +
             'row.session-row > box > list > row.header > box.header ' +
-            '{ min-height: 0; padding-top: 4px; padding-bottom: 4px; }');
+            '{ min-height: 0; padding-top: 4px; padding-bottom: 4px; }' +
+            // A collapsed row's note, shaded like the opened section it
+            // stands in for (libadwaita's row.expander list.nested).
+            'row.session-row .session-note { padding: 6px 12px; ' +
+            'background-color: color-mix(in srgb, var(--card-shade-color) 50%, transparent); }' +
+            // On a list's last row the note, not the header, meets the
+            // rounded bottom edge.
+            'list.boxed-list > row.session-row.with-note:last-child row.header ' +
+            '{ border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-width: 1px; }' +
+            'list.boxed-list > row.session-row:last-child .session-note ' +
+            '{ border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }');
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
 
@@ -602,7 +604,31 @@ export class TimesheetWindow {
         // Set after construction: passed to the constructor, they are
         // parsed as markup before use_markup takes effect.
         row.title = session.project ? `${session.client} · ${session.project}` : session.client;
-        row.subtitle = sessionSubtitle(session, false);
+        row.subtitle = sessionFlags(session);
+
+        // Collapsed, the note shows beneath the header in the opened
+        // section's shade, so it reads as the row's content rather than
+        // part of its title line; open, the Note field shows it instead.
+        // It goes inside the row's own box, after the header's list, so it
+        // stays within the row's rounded border.
+        let noteText = session.description.trim();
+        let note = new Gtk.Label({
+            label: noteText,
+            xalign: 0,
+            ellipsize: Pango.EllipsizeMode.END,
+            css_classes: ['session-note', 'caption'],
+        });
+        let rowBox = row.get_first_child();
+        rowBox.insert_child_after(note, rowBox.get_first_child());
+        let syncNote = () => {
+            let shown = noteText !== '' && !row.expanded;
+            note.visible = shown;
+            if (shown)
+                row.add_css_class('with-note');
+            else
+                row.remove_css_class('with-note');
+        };
+        syncNote();
         // Added, not set through css_classes: that would replace the row's
         // own "expander" class, which is what turns its arrow when opened.
         row.add_css_class('session-row');
@@ -625,7 +651,7 @@ export class TimesheetWindow {
         // would otherwise mean a month of range queries to draw one list.
         let loaded = false;
         row.connect('notify::expanded', () => {
-            row.subtitle = sessionSubtitle(session, row.expanded);
+            syncNote();
             if (row.expanded)
                 this._expandedIds.add(session.id);
             else
