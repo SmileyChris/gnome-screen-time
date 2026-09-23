@@ -987,19 +987,11 @@ export class TimesheetWindow {
     // rebuilds this row from scratch on every ClockChanged - fired whenever
     // a field saves itself, by "Use actual", and by any other client
     // mutating the clock, but never by the clock's own 30s heartbeat, which
-    // does not touch onChange - and an untouched field must track the session, not freeze
-    // at its first-render value. That alone is not enough for a session
-    // that is still running, though: nothing mutates the clock (so nothing
-    // fires ClockChanged, so refresh() never runs) just because time keeps
-    // passing. _tickLive() below is what actually keeps a running session's
-    // figures current between those refreshes: expand it at 1.0 h, leave
-    // the row open while the clock runs to 2.0 h, and the next tick has
-    // already moved draft.hours and the spin button to 2.0 h by the time
-    // +1/4 is pressed, sending 2.25 rather than a stale 1.25. A field the
-    // user HAS edited (its dirty flag is true) is left alone - that's an
-    // in-progress edit, not something to overwrite - and clearing dirty on
-    // a successful save is exactly what hands the field back to being
-    // re-seeded here.
+    // does not touch onChange - and an untouched field must track the
+    // session, not freeze at its first-render value. A field the user HAS
+    // edited (its dirty flag is true) is left alone - that's an in-progress
+    // edit, not something to overwrite - and clearing dirty on a successful
+    // save is exactly what hands the field back to being re-seeded here.
     _draftFor(session) {
         let draft = this._drafts.get(session.id);
         if (!draft) {
@@ -1105,10 +1097,10 @@ export class TimesheetWindow {
                     return;
                 this._updateSession(session, { billedHours: Math.round(hours.value * 100) / 100 });
             };
-            hours.connect('activate', saveHours);
-            let hoursFocus = new Gtk.EventControllerFocus();
-            hoursFocus.connect('leave', saveHours);
-            hours.add_controller(hoursFocus);
+            // The spin button commits typed text on Enter or on losing
+            // focus, and its own - and + step without taking focus at all;
+            // each ends in value-changed, so that one signal saves them all.
+            hours.connect('value-changed', saveHours);
             this._registerFocusField(session, 'hours', hours);
 
             // Sends billedHours alone (the note is left untouched, since
@@ -1125,25 +1117,13 @@ export class TimesheetWindow {
             let controls = new Gtk.Box({ spacing: 6 });
             controls.append(useActual);
             controls.append(hours);
-            for (let [label, delta] of [['¼', 0.25], ['½', 0.5], ['+1', 1]]) {
-                let button = new Gtk.Button({ label, css_classes: ['flat'] });
-                // A discrete click, not typing - it goes through the same
-                // dirty path as typing (HoursBinding marks hoursDirty when
-                // the value changes) and then saves immediately, rather
-                // than waiting for a focus change that may never come.
-                button.connect('clicked', () => {
-                    hours.value += delta;
-                    saveHours();
-                });
-                controls.append(button);
-            }
-            let round = new Gtk.Button({ label: 'Round', css_classes: ['flat'] });
+            let round = new Gtk.Button({ label: 'Round up', css_classes: ['flat'] });
             round.connect('clicked', () => {
                 // Up to the next quarter hour, never down. The epsilon keeps
                 // a value already on a quarter (1.25) from float noise
                 // pushing it to the next one.
+                // Saved by the spin button's value-changed handler above.
                 hours.value = Math.ceil(hours.value * 4 - 1e-9) / 4;
-                saveHours();
             });
             controls.append(round);
             // Only offered when there is something to round: hidden while
@@ -1190,7 +1170,7 @@ export class TimesheetWindow {
     // so only the dirty flag(s) for the field(s) this call actually wrote
     // are cleared here - that hands them back to _draftFor to re-seed from
     // the session on the rebuild. A field this call did NOT touch (an
-    // unsaved Note edit sitting in the row while only Bill's ¼ button was
+    // unsaved Note edit sitting in the row while only "Use actual" was
     // clicked, say) is left dirty, with its draft text untouched: clearing
     // every flag here, rather than just the one(s) this call's fields name,
     // would otherwise discard that unrelated unsaved edit - exactly what
