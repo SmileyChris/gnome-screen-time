@@ -511,7 +511,7 @@ export class PopupWidget {
             });
             let child = icon;
             if (text) {
-                child = new St.BoxLayout({ style: 'spacing: 4px;' });
+                child = new St.BoxLayout({ style: 'spacing: 4px; padding-left: 4px;' });
                 child.add_child(new St.Label({
                     text,
                     y_align: Clutter.ActorAlign.CENTER,
