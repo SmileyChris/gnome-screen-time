@@ -16,6 +16,7 @@ import { parseClock } from './clockTime.js';
 import { HoursBinding, saveFields } from './timesheetDraft.js';
 import { dayHeading } from './timesheetSummary.js';
 import { buildClientsPage } from './clientsPage.js';
+import { readProjects } from './clients.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
@@ -153,6 +154,12 @@ function describeExportError(code) {
 
 export class TimesheetWindow {
     constructor(app, settings) {
+        // Kept for _projectRow(), which reads a client's project list
+        // straight from GSettings rather than over D-Bus - the Shell owns
+        // no such call, and the Timesheet already reads settings directly
+        // for the Clients page (buildClientsPage, below).
+        this._settings = settings;
+
         // The session bus itself can be unreachable (not just the Clock
         // object on it), which throws here rather than lazily on first
         // call. Either way the window must still appear, with the error
@@ -520,7 +527,7 @@ export class TimesheetWindow {
     // shutdown whose 'shutdown' handler didn't run in time.
     _sessionRow(session) {
         let row = new Adw.ExpanderRow({
-            title: session.client,
+            title: session.project ? `${session.client} · ${session.project}` : session.client,
             subtitle: sessionSubtitle(session),
             css_classes: session.exportedAt ? ['dim-label'] : [],
         });
@@ -602,6 +609,10 @@ export class TimesheetWindow {
         row.add_row(this._timeRow(session, evidence, draft, 'start'));
         if (session.endMs !== null)
             row.add_row(this._timeRow(session, evidence, draft, 'end'));
+
+        let projectRow = this._projectRow(session);
+        if (projectRow)
+            row.add_row(projectRow);
 
         // Activities sit between Bill and Note: the evidence for adjusting
         // the one and for writing the other.
@@ -709,6 +720,32 @@ export class TimesheetWindow {
                 best = other.endMs;
         }
         return best;
+    }
+
+    // General, then the client's projects (inactive ones included), plus
+    // the session's own project if it has since been deleted, so an old
+    // session never silently turns General. null when the client has no
+    // projects at all and this session never had one either - nothing to
+    // choose between. Saves on change, like "Use actual", since it is a
+    // single choice rather than typed text.
+    _projectRow(session) {
+        let names = readProjects(this._settings, session.client).map(p => p.name);
+        if (session.project !== null && !names.includes(session.project))
+            names.push(session.project);
+        if (names.length === 0)
+            return null;
+        let choices = [null, ...names];
+        let row = new Adw.ComboRow({
+            title: 'Project',
+            model: Gtk.StringList.new(choices.map(p => p ?? 'General')),
+            selected: choices.indexOf(session.project ?? null),
+        });
+        row.connect('notify::selected', () => {
+            let chosen = choices[row.selected];
+            if (chosen !== (session.project ?? null))
+                this._updateSession(session, { project: chosen });
+        });
+        return row;
     }
 
     // The session's recorded activity as one compact block under a
