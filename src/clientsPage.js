@@ -102,7 +102,12 @@ export function buildClientsPage(settings, window) {
 
     renderClients();
 
-    clientsGroup.add(new ShortcutRow(
+    // Clock settings go in their own group so renderClients() appends
+    // rebuilt client rows without pushing these settings above them.
+    const settingsGroup = new Adw.PreferencesGroup({ title: 'Settings' });
+    page.add(settingsGroup);
+
+    settingsGroup.add(new ShortcutRow(
         settings, 'toggle-clock', 'Toggle the clock',
         'Stops the clock, or starts the client you used last.'));
 
@@ -112,7 +117,7 @@ export function buildClientsPage(settings, window) {
         adjustment: new Gtk.Adjustment({ lower: 0, upper: 480, step_increment: 5 }),
     });
     settings.bind('clock-nudge-minutes', nudgeRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-    clientsGroup.add(nudgeRow);
+    settingsGroup.add(nudgeRow);
 
     return {
         page,
