@@ -88,22 +88,27 @@ const LIVE_TICK_SECONDS = 30;
 // without rebuilding the row - actualHoursOf()/hoursOf() already read
 // Date.now() fresh on every call; something just has to call them again
 // and push the result into the widget that's already on screen.
-function sessionSubtitle(session) {
+// A session row's times, shown at the right of its title line so a row
+// takes one line unless it has something to flag.
+function sessionTimes(session) {
     let end = session.endMs === null ? 'now' : clockOf(session.endMs);
     let actual = actualHoursOf(session);
-    let billed = hoursOf(session);
-    let subtitle = `${clockOf(session.startMs)}–${end}`;
+    let times = `${clockOf(session.startMs)}–${end}   `;
     if (hasBilledHours(session))
-        subtitle += `   ${billed.toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
-    else
-        subtitle += `   ${actual.toFixed(2)} h`;
+        return `${times}${hoursOf(session).toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
+    return `${times}${actual.toFixed(2)} h`;
+}
+
+// What the subtitle still carries: only the flags, empty for most rows.
+function sessionFlags(session) {
+    let flags = [];
     if (session.interrupted)
-        subtitle += '   · interrupted';
+        flags.push('interrupted');
     else if (session.cleanStop)
-        subtitle += '   · stopped at shutdown';
+        flags.push('stopped at shutdown');
     if (session.exportedAt)
-        subtitle += '   · exported';
-    return subtitle;
+        flags.push('exported');
+    return flags.join(' · ');
 }
 
 // Decimal hours for anything being billed; h/m for anything being read.
@@ -528,9 +533,14 @@ export class TimesheetWindow {
     _sessionRow(session) {
         let row = new Adw.ExpanderRow({
             title: session.project ? `${session.client} · ${session.project}` : session.client,
-            subtitle: sessionSubtitle(session),
+            subtitle: sessionFlags(session),
             css_classes: session.exportedAt ? ['dim-label'] : [],
         });
+        let times = new Gtk.Label({
+            label: sessionTimes(session),
+            css_classes: ['dim-label', 'numeric'],
+        });
+        row.add_suffix(times);
 
         // Bookkeeping for _tickLive(): only a still-running session's
         // figures go stale between refreshes (nothing mutates the clock
@@ -542,7 +552,7 @@ export class TimesheetWindow {
         // update than the subtitle already covers.
         let live = null;
         if (session.endMs === null) {
-            live = { session, row, clockLabel: null, hours: null, draft: null };
+            live = { session, row, times, clockLabel: null, hours: null, draft: null };
             this._liveRows.set(session.id, live);
         }
 
@@ -954,12 +964,12 @@ export class TimesheetWindow {
     // numbers that would otherwise freeze at whatever they were on the last
     // refresh() or expand (see the comments on _timeRow and _draftFor) just
     // need recomputing and pushing back into the widgets that are already
-    // on screen - a subtitle string, an ActionRow subtitle, a spin button's
+    // on screen - the row's times label, an ActionRow subtitle, a spin button's
     // value - never a rebuild.
     _tickLive() {
         for (let live of this._liveRows.values()) {
-            let { session, row, clockLabel, hours, binding, draft } = live;
-            row.subtitle = sessionSubtitle(session);
+            let { session, times, clockLabel, hours, binding, draft } = live;
+            times.label = sessionTimes(session);
             if (!clockLabel || !hours || !binding || !draft)
                 continue;   // not expanded (yet): nothing else to refresh
             clockLabel.label = billHeading(actualHoursOf(session));
