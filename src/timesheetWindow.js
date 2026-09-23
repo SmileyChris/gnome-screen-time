@@ -15,6 +15,7 @@ import { INTERFACE_XML } from './clockDBus.js';
 import { parseClock } from './clockTime.js';
 import { HoursBinding, saveFields } from './timesheetDraft.js';
 import { dayHeading } from './timesheetSummary.js';
+import { buildClientsPage } from './clientsPage.js';
 
 const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
@@ -151,7 +152,7 @@ function describeExportError(code) {
 }
 
 export class TimesheetWindow {
-    constructor(app) {
+    constructor(app, settings) {
         // The session bus itself can be unreachable (not just the Clock
         // object on it), which throws here rather than lazily on first
         // call. Either way the window must still appear, with the error
@@ -174,9 +175,29 @@ export class TimesheetWindow {
         });
 
         this._page = new Adw.PreferencesPage();
-        let header = new Adw.HeaderBar();
-        header.pack_end(this._exportButton());
-        let toolbar = new Adw.ToolbarView({ content: this._page });
+        // Sessions and Clients share the window; the clock's settings live
+        // here rather than in Preferences, which is about screen time.
+        this._stack = new Adw.ViewStack();
+        this._stack.add_titled_with_icon(this._page, 'sessions', 'Sessions',
+            'x-office-spreadsheet-symbolic');
+        let clients = buildClientsPage(settings, this.window);
+        this._focusAddClient = clients.focusAddClient;
+        this._stack.add_titled_with_icon(clients.page, 'clients', 'Clients',
+            'system-users-symbolic');
+
+        let header = new Adw.HeaderBar({
+            title_widget: new Adw.ViewSwitcher({
+                stack: this._stack,
+                policy: Adw.ViewSwitcherPolicy.WIDE,
+            }),
+        });
+        let exportButton = this._exportButton();
+        header.pack_end(exportButton);
+        // Export covers sessions only.
+        this._stack.connect('notify::visible-child-name', () => {
+            exportButton.visible = this._stack.visible_child_name === 'sessions';
+        });
+        let toolbar = new Adw.ToolbarView({ content: this._stack });
         toolbar.add_top_bar(header);
         // Every rejection path in this window reports through a toast, so the
         // overlay belongs to the window rather than to a later feature.
@@ -445,6 +466,14 @@ export class TimesheetWindow {
     showDay(dayKey) {
         this._pendingDay = dayKey;
         this._scrollToPendingDaySoon();
+    }
+
+    // Switches to `name`'s page; on Clients, the add field takes focus so a
+    // name can be typed straight away (the popup's "Add client…").
+    showPage(name) {
+        this._stack.visible_child_name = name;
+        if (name === 'clients')
+            this._focusAddClient();
     }
 
     // Waits for a drawn, laid-out window, so the group's position is known.
