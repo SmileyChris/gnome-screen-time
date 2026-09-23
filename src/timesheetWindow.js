@@ -1153,6 +1153,14 @@ export class TimesheetWindow {
                 saveHours();
             });
             controls.append(round);
+            // Only offered when there is something to round: hidden while
+            // the hours already sit on a quarter.
+            let syncRound = () => {
+                let quarters = hours.value * 4;
+                round.visible = Math.abs(quarters - Math.round(quarters)) > 1e-9;
+            };
+            hours.adjustment.connect('value-changed', syncRound);
+            syncRound();
 
             // Two lines of its own - the heading, then the controls -
             // rather than an ActionRow suffix, which squeezed the title
