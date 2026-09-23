@@ -320,11 +320,11 @@ export class TimesheetWindow {
                     fromDayKey, toDayKeyExclusive, path, format);
                 let result2 = JSON.parse(json);
                 // Sessions skipped because their client isn't on the list at
-                // all (most likely deleted from Preferences - see
-                // clients.js's isKnownClient and prefs.js's confirm-delete
-                // dialog). Appended to whichever branch below actually
-                // reports success, so it never appears alongside an outright
-                // failure that wrote nothing.
+                // all (most likely deleted from the Timesheet's Clients page
+                // - see clients.js's isKnownClient and clientsPage.js's
+                // confirm-delete dialog). Appended to whichever branch below
+                // actually reports success, so it never appears alongside an
+                // outright failure that wrote nothing.
                 let skippedNote = result2.skippedUnknown > 0
                     ? ` ${result2.skippedUnknown} session(s) skipped for an unknown client.`
                     : '';

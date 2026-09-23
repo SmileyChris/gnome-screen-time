@@ -314,7 +314,8 @@ export default class ScreenTimeExtension extends Extension {
 
     // Stops if running; otherwise starts the last client used. With no
     // clients configured, or with last-client naming one since deleted from
-    // Preferences, there is nothing to start, so it does nothing.
+    // the Timesheet's Clients page, there is nothing to start, so it does
+    // nothing.
     _toggleClock() {
         try {
             if (this._clock.running) {
