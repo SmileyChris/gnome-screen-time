@@ -16,6 +16,7 @@ const FILES = [
     './appLimits.test.js',
     './usageStore.test.js',
     './activitySources.test.js',
+    './windowClass.test.js',
 ];
 
 // Removes the scratch directory and everything UsageStore wrote inside it,

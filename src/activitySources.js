@@ -1,6 +1,7 @@
 import Gio from 'gi://Gio';
 import { sessionFromTitle, focusedPane, basename } from './zellijLayout.js';
 import { OTHER_KEY } from './usageStore.js';
+import { splitWindowClass } from './windowClass.js';
 
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async', 'communicate_utf8_finish');
 
@@ -110,12 +111,29 @@ export class ZellijSource {
     }
 }
 
+// A window with no .desktop file and a reverse-DNS class is tracked under
+// its app family (see UsageTracker._currentApp); this adds the class's last
+// segment as the activity, so org.gnome.Shell.Extensions.ScreenTime.Timesheet
+// reads as Screen Time / Timesheet. Answers from the class alone, no spawn.
+export class WindowClassSource {
+    claims(appId) {
+        return appId.startsWith('wmclass:');
+    }
+
+    async resolve(win) {
+        let child = splitWindowClass(win.get_wm_class())?.child;
+        return child ? { activityId: child.id, activityName: child.name } : null;
+    }
+}
+
 // Picks the source that claims an app and debounces its resolves per window.
 // Callers inside the debounce window get the cached (possibly still pending)
 // promise, so concurrent askers never trigger a second spawn.
 export class ActivitySourceRegistry {
     constructor(sources = [new ZellijSource()]) {
-        this._sources = sources;
+        // Always last: it only claims window-backed apps, which no other
+        // source does, and callers passing their own list need not know it.
+        this._sources = [...sources, new WindowClassSource()];
         this._recent = new WeakMap();   // win -> { at, promise }
     }
 

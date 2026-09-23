@@ -1,5 +1,5 @@
 import { test, assert, assertEqual } from './harness.js';
-import { ActivitySourceRegistry, ZellijSource, TERMINAL_APP_IDS, DEBOUNCE_MS }
+import { ActivitySourceRegistry, ZellijSource, WindowClassSource, TERMINAL_APP_IDS, DEBOUNCE_MS }
     from '../src/activitySources.js';
 
 class FakeSource {
@@ -193,4 +193,14 @@ test('registry: passes the app id to the source', async () => {
     let reg = new ActivitySourceRegistry([src]);
     await reg.resolve({}, 'term.desktop');
     assertEqual(seen, 'term.desktop');
+});
+
+test('registry: a window-backed app gets its class\'s last segment as the activity', async () => {
+    let registry = new ActivitySourceRegistry([]);
+    let win = { get_wm_class: () => 'org.gnome.Shell.Extensions.ScreenTime.Timesheet' };
+    assertEqual(await registry.resolve(win, 'wmclass:org.gnome.Shell.Extensions.ScreenTime'),
+        { activityId: 'Timesheet', activityName: 'Timesheet' });
+    let plain = { get_wm_class: () => 'com.example.MyApp' };
+    assertEqual(await registry.resolve(plain, 'wmclass:com.example.MyApp'), null);
+    assert(!new WindowClassSource().claims('org.gnome.Console.desktop'));
 });
