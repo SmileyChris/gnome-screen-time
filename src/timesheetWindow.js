@@ -1099,8 +1099,12 @@ export class TimesheetWindow {
             };
             // The spin button commits typed text on Enter or on losing
             // focus, and its own - and + step without taking focus at all;
-            // each ends in value-changed, so that one signal saves them all.
-            hours.connect('value-changed', saveHours);
+            // each changes the adjustment, so that one signal saves them
+            // all. On the adjustment, connected after HoursBinding, not on
+            // the spin button: the spin button's own value-changed fires
+            // before HoursBinding has marked the hours edited, so the guard
+            // above would skip every save.
+            hours.adjustment.connect('value-changed', saveHours);
             this._registerFocusField(session, 'hours', hours);
 
             // Sends billedHours alone (the note is left untouched, since
@@ -1114,15 +1118,21 @@ export class TimesheetWindow {
             });
             useActual.connect('clicked', () => this._updateSession(session, { billedHours: null }));
 
-            let controls = new Gtk.Box({ spacing: 6 });
-            controls.append(useActual);
+            // One line: the heading, the field and Round up, then Use actual
+            // at the far end.
+            heading.valign = Gtk.Align.CENTER;
+            let controls = new Gtk.Box({
+                spacing: 6,
+                margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
+            });
+            controls.append(heading);
             controls.append(hours);
             let round = new Gtk.Button({ label: 'Round up', css_classes: ['flat'] });
             round.connect('clicked', () => {
                 // Up to the next quarter hour, never down. The epsilon keeps
                 // a value already on a quarter (1.25) from float noise
                 // pushing it to the next one.
-                // Saved by the spin button's value-changed handler above.
+                // Saved by the adjustment's value-changed handler above.
                 hours.value = Math.ceil(hours.value * 4 - 1e-9) / 4;
             });
             controls.append(round);
@@ -1134,19 +1144,10 @@ export class TimesheetWindow {
             };
             hours.adjustment.connect('value-changed', syncRound);
             syncRound();
+            controls.append(new Gtk.Box({ hexpand: true }));
+            controls.append(useActual);
 
-            // Two lines of its own - the heading, then the controls -
-            // rather than an ActionRow suffix, which squeezed the title
-            // into a sliver beside this many controls. The heading matches
-            // the Started, Ended and Note titles.
-            let billBox = new Gtk.Box({
-                orientation: Gtk.Orientation.VERTICAL,
-                spacing: 6,
-                margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
-            });
-            billBox.append(heading);
-            billBox.append(controls);
-            billRow = new Adw.PreferencesRow({ activatable: false, child: billBox });
+            billRow = new Adw.PreferencesRow({ activatable: false, child: controls });
         }
 
         return [billRow, noteRow];
