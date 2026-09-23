@@ -127,6 +127,7 @@ export class PopupWidget {
         this._showApps = null;
         this._clientView = false;
         this._timerSection.reset();
+        this._clockSection.reset();
         this._build();
     }
 
