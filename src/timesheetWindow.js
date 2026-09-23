@@ -23,10 +23,6 @@ const ClockProxy = Gio.DBusProxy.makeProxyWrapper(INTERFACE_XML);
 
 // The hours override row's heading. One helper, since _tickLive() rewrites
 // it while a session runs.
-function billHeading(hours) {
-    return `Hours · ${hours.toFixed(2)} h on the clock`;
-}
-
 // One compact line of the Activities block: name on the left, hours on the
 // right, indented and dimmed below the app it belongs to.
 function activityLine(name, seconds, depth) {
@@ -608,20 +604,11 @@ export class TimesheetWindow {
         row.add_suffix(times);
 
         // Bookkeeping for _tickLive(): only a still-running session's
-        // figures go stale between refreshes (nothing mutates the clock
-        // just because time passes, so nothing fires ClockChanged to
-        // trigger a refresh() on its own), so only these get an entry.
-        // clockLabel/draft start null and are filled in by
-        // _fillEvidence()/_adjustRows() below once the row is actually
-        // expanded - until then there is nothing more for a tick to update
-        // than the subtitle already covers. A running session's Bill is
-        // read-only (see _adjustRows), so there is no spin button for a
-        // tick to keep in step - only the heading, via clockLabel.
-        let live = null;
-        if (session.endMs === null) {
-            live = { session, row, times, clockLabel: null, draft: null };
-            this._liveRows.set(session.id, live);
-        }
+        // times go stale between refreshes (nothing mutates the clock just
+        // because time passes, so nothing fires ClockChanged to trigger a
+        // refresh() on its own), so only these get an entry.
+        if (session.endMs === null)
+            this._liveRows.set(session.id, { session, times });
 
         // Evidence is fetched on expand, not up front: a month of sessions
         // would otherwise mean a month of range queries to draw one list.
@@ -634,7 +621,7 @@ export class TimesheetWindow {
             if (!row.expanded || loaded)
                 return;
             loaded = true;
-            this._fillEvidence(row, session, live);
+            this._fillEvidence(row, session);
         });
         // refresh() rebuilds this row from scratch, so a row the user had
         // open is re-expanded here rather than coming back collapsed -
@@ -645,7 +632,7 @@ export class TimesheetWindow {
         return row;
     }
 
-    _fillEvidence(row, session, live) {
+    _fillEvidence(row, session) {
         let evidence;
         try {
             let [json] = this._proxy.GetEvidenceSync(session.id);
@@ -680,8 +667,6 @@ export class TimesheetWindow {
         // the Note/Bill fields in _adjustRows, so all five widgets agree on
         // what the user has and hasn't touched yet.
         let draft = this._draftFor(session);
-        if (live)
-            live.draft = draft;
 
         row.add_row(this._timeRow(session, evidence, draft));
 
@@ -691,8 +676,9 @@ export class TimesheetWindow {
 
         // Activities sit between Bill and Note: the evidence for adjusting
         // the one and for writing the other.
-        let [billRow, noteRow] = this._adjustRows(session, evidence, draft, live);
-        row.add_row(billRow);
+        let [billRow, noteRow] = this._adjustRows(session, draft);
+        if (billRow)
+            row.add_row(billRow);
         if (evidence.entries.length > 0 || evidence.unattributedSeconds > 0)
             row.add_row(this._activityRow(session, evidence));
         row.add_row(noteRow);
@@ -979,11 +965,11 @@ export class TimesheetWindow {
     // Enter or on losing focus - so the dirty flags below double as the
     // guard against sending the same edit twice.
     //
-    // A running session (no endMs yet) shows its Bill read-only: its hours
+    // A running session (no endMs yet) gets no Bill row (null): its hours
     // change under you every tick (see _tickLive), so there is nothing
     // sensible to bill until it stops. Its Note is still fully editable -
     // unlike the hours, a note can be written at any time.
-    _adjustRows(session, evidence, draft, live) {
+    _adjustRows(session, draft) {
         let running = session.endMs === null;
 
         let noteRow = new Adw.EntryRow({ title: 'Note' });
@@ -1017,22 +1003,17 @@ export class TimesheetWindow {
         noteRow.add_controller(noteFocus);
         this._registerFocusField(session, 'note', noteRow);
 
+        // The actual hours are already on the row's title line, so the
+        // heading only names the controls. A running session has no Bill
+        // row at all: its times tick on the title line.
         let heading = new Gtk.Label({
-            label: billHeading(evidence.spanSeconds / 3600),
+            label: 'Hours',
             xalign: 0,
             css_classes: ['caption', 'dim-label'],
         });
-        if (live)
-            live.clockLabel = heading;
 
-        let billRow;
-        if (running) {
-            heading.margin_top = 8;
-            heading.margin_bottom = 8;
-            heading.margin_start = 12;
-            heading.margin_end = 12;
-            billRow = new Adw.PreferencesRow({ activatable: false, child: heading });
-        } else {
+        let billRow = null;
+        if (!running) {
             let hours = new Gtk.SpinButton({
                 adjustment: new Gtk.Adjustment({
                     // 24 would clamp a clock left running over a weekend to
@@ -1112,32 +1093,20 @@ export class TimesheetWindow {
             billBox.append(heading);
             billBox.append(controls);
             billRow = new Adw.PreferencesRow({ activatable: false, child: billBox });
-            // No live.hours/live.binding handoff here: `live` (see
-            // _sessionRow) is only ever set for a still-running session,
-            // and this branch - the editable Bill - only ever runs for one
-            // that has already stopped, so the two never coincide.
         }
 
         return [billRow, noteRow];
     }
 
-    // Recomputes every currently-running session's row locally, every
-    // LIVE_TICK_SECONDS, with no D-Bus call at all: actualHoursOf() already
-    // reads Date.now() fresh on every call, so the figures that would
-    // otherwise freeze at whatever they were on the last refresh() or
-    // expand (see the comments on _timeRow and _draftFor) just need
-    // recomputing and pushing back into the widgets that are already on
-    // screen - the row's times label and, once expanded, its read-only
-    // Bill heading - never a rebuild. There is no spin button/binding to
-    // keep in step here: a running session's Bill is read-only (see
-    // _adjustRows), since it can't sensibly be billed until it stops.
+    // Recomputes every currently-running session's times label locally,
+    // every LIVE_TICK_SECONDS, with no D-Bus call at all: actualHoursOf()
+    // reads Date.now() fresh on every call, so the figure just needs
+    // pushing back into the label already on screen - never a rebuild. A
+    // running session has no Bill controls to keep in step (see
+    // _adjustRows): it can't sensibly be billed until it stops.
     _tickLive() {
-        for (let live of this._liveRows.values()) {
-            let { session, times, clockLabel } = live;
+        for (let { session, times } of this._liveRows.values())
             times.label = sessionTimes(session);
-            if (clockLabel)
-                clockLabel.label = billHeading(actualHoursOf(session));
-        }
     }
 
     // Shared by every field that saves itself (Note, Bill/hours), by "Use
