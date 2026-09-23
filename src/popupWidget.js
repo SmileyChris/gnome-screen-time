@@ -88,11 +88,11 @@ export class PopupWidget {
         this._intervalLog = intervalLog;
         this._date = todayKeyFor(settings);
         this._timerSection = new AppTimerSection(store, settings);
-        // The client list's "Add client…" row opens Preferences, the same
-        // way the footer's gear button does.
+        // The client list's "Add client…" row opens the Timesheet on its
+        // Clients page, where clients are managed.
         this._clockSection = new ClockSection(clock, settings, () => {
             this._menu.close();
-            this._openPrefs?.();
+            this._onOpenTimesheet?.({ clients: true });
         });
         // Paths (joined with \0) whose rows are expanded, so a rebuild after
         // an edit lands where the user was. Cleared on reopen and date change.
@@ -548,7 +548,7 @@ export class PopupWidget {
             clock.connect('button-release-event', () => {
                 if (opensTimesheet) {
                     this._menu.close();
-                    this._onOpenTimesheet?.(this._date);
+                    this._onOpenTimesheet?.({ day: this._date });
                 } else if (!buttons.some(btn => btn.hover)) {
                     // A release over a button is that button's click, not a
                     // tap on the card around it.

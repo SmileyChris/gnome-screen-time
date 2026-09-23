@@ -8,9 +8,8 @@ import { STORE_FILE, knownAppsFromData, dateKey } from './usageStore.js';
 import { formatTime } from './formatTime.js';
 import { getAppLimits, setAppLimit, removeAppLimit } from './appLimits.js';
 import { getAppNames } from './appNames.js';
-import { readClients, writeClients } from './clients.js';
-import { ShortcutRow } from './shortcutRow.js';
 import { migratePanelSetting } from './panelMode.js';
+import { timesheetArgv } from './timesheetArgs.js';
 
 const HISTORY_DAYS = 7;
 const CHART_HEIGHT = 110;
@@ -227,7 +226,7 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
 
         this._addLimitsGroup(page, settings, data);
 
-        this._addClientsGroup(page, settings, window);
+        this._addClientsLink(page);
 
         const retentionGroup = new Adw.PreferencesGroup({title: 'Data Retention'});
         page.add(retentionGroup);
@@ -514,163 +513,35 @@ export default class ScreenTimePreferences extends ExtensionPreferences {
         limitsGroup.add(addRow);
     }
 
-    // The client list is the only place clients get created: the popup
-    // cannot take text input sanely. Active is the only way to retire a
-    // client short of deleting it outright: recentClients() (clients.js)
-    // excludes an inactive client from the popup's padding, but
-    // selectExportable() (timeExport.js) keeps it exportable regardless, so
-    // turning a client inactive - rather than deleting it - is how its
-    // history stays reachable from a later export.
-    _addClientsGroup(page, settings, window) {
-        const clientsGroup = new Adw.PreferencesGroup({
-            title: 'Clients',
-            description: 'Clients the clock tracks time for. Inactive ones stay out of the popup ' +
-                'but still export.',
+    // Clients and the clock's settings moved to the Timesheet, which is the
+    // clock's own window. This row keeps them findable from here.
+    _addClientsLink(page) {
+        const group = new Adw.PreferencesGroup();
+        const row = new Adw.ActionRow({
+            title: 'Clients & clock',
+            subtitle: 'Managed in the Timesheet',
         });
-        page.add(clientsGroup);
-
-        const clientRows = [];
-        let addRow = null;
-
-        const renderClients = () => {
-            for (let row of clientRows.splice(0))
-                clientsGroup.remove(row);
-            let list = readClients(settings);
-            list.forEach((client, i) => {
-                let row = new Adw.ActionRow({ title: client.name });
-
-                let active = new Gtk.Switch({
-                    active: client.active, valign: Gtk.Align.CENTER,
-                    tooltip_text: 'Active (offered in the popup)',
-                });
-                active.connect('notify::active', () => {
-                    let next = readClients(settings);
-                    next[i].active = active.active;
-                    writeClients(settings, next);
-                });
-                row.add_suffix(active);
-
-                // Deleting is the only way to make a client's name stop
-                // resolving at all: selectExportable() and mergeSessions()
-                // (timeExport.js) key rows by client name, so a session
-                // already recorded against a deleted client can never be
-                // exported again unless the same name is added back -
-                // turning it inactive instead keeps that door open.
-                let remove = new Gtk.Button({
-                    icon_name: 'user-trash-symbolic', valign: Gtk.Align.CENTER,
-                    css_classes: ['flat'],
-                });
-                remove.connect('clicked', () => {
-                    let dialog = new Adw.AlertDialog({
-                        heading: `Delete ${client.name}?`,
-                        body: `Sessions already recorded for ${client.name} will no longer be ` +
-                            'exported unless the client is added again, even though they stay ' +
-                            'in the Timesheet. Consider turning it inactive instead - it drops ' +
-                            'out of the popup but stays exportable.',
-                    });
-                    dialog.add_response('cancel', 'Cancel');
-                    dialog.add_response('delete', 'Delete');
-                    dialog.set_response_appearance('delete', Adw.ResponseAppearance.DESTRUCTIVE);
-                    dialog.set_default_response('cancel');
-                    dialog.set_close_response('cancel');
-                    dialog.connect('response', (_dialog, response) => {
-                        if (response !== 'delete')
-                            return;
-                        let next = readClients(settings);
-                        next.splice(i, 1);
-                        writeClients(settings, next);
-                        renderClients();
-                    });
-                    dialog.present(window);
-                });
-                row.add_suffix(remove);
-
-                clientsGroup.add(row);
-                clientRows.push(row);
-            });
-
-            addRow = new Adw.EntryRow({ title: 'Add a client' });
-            addRow.connect('entry-activated', () => {
-                let name = addRow.text.trim();
-                if (name.length === 0)
-                    return;
-                let next = readClients(settings);
-                if (next.some(c => c.name === name))
-                    return;
-                next.push({ name, active: true });
-                writeClients(settings, next);
-                addRow.text = '';
-                renderClients();
-                // renderClients() built a new field, so move focus to it
-                // and the next name can be typed straight away.
-                addRow.grab_focus();
-            });
-            clientsGroup.add(addRow);
-            clientRows.push(addRow);
-        };
-
-        renderClients();
-
-        // The popup's "Add client…" row sets prefs-focus to ask for this
-        // field (see clockSection.js), since the Shell can pass Preferences
-        // nothing else. The request is used up here, so a later open from
-        // the gear starts at the top as usual. It is also watched while the
-        // window is open, because the Shell then only raises the window.
-        const focusAddClient = () => {
-            if (settings.get_string('prefs-focus') !== 'add-client')
-                return;
-            settings.set_string('prefs-focus', '');
-            addRow.grab_focus();
-            // Focus alone does not scroll when the field was already the
-            // page's focus child, e.g. the window was left open and scrolled
-            // back up. The page scrolls through an Adw.ClampScrollable, not a
-            // Gtk.Viewport, so this centres the field by hand when it is off
-            // screen.
-            let scroller = addRow.get_ancestor(Gtk.ScrolledWindow);
-            let [ok, rect] = scroller ? addRow.compute_bounds(scroller) : [false, null];
-            if (!ok)
-                return;
-            let adj = scroller.vadjustment;
-            let top = rect.get_y();
-            let height = rect.get_height();
-            if (top < 0 || top + height > adj.page_size)
-                adj.value = adj.value + top - (adj.page_size - height) / 2;
-        };
-        // Waits for a painted, laid-out window, so the page can scroll down
-        // to the field. fillPreferencesWindow() can finish before or after
-        // the window is first shown.
-        const focusAfterPaint = () => {
-            let frameClock = window.get_frame_clock();
-            let paintId = frameClock.connect('after-paint', () => {
-                frameClock.disconnect(paintId);
-                focusAddClient();
-            });
-            window.queue_draw();
-        };
-        if (window.get_mapped()) {
-            focusAfterPaint();
-        } else {
-            let mapId = window.connect('map', () => {
-                window.disconnect(mapId);
-                focusAfterPaint();
-            });
-        }
-        const focusId = settings.connect('changed::prefs-focus', focusAddClient);
-        window.connect('close-request', () => {
-            settings.disconnect(focusId);
-            return false;
+        const button = new Gtk.Button({ label: 'Open', valign: Gtk.Align.CENTER });
+        button.connect('clicked', () => {
+            try {
+                let argv = timesheetArgv(this.path, { clients: true });
+                // A plain Gio.Subprocess carries no activation token, so
+                // Mutter's focus-stealing prevention maps the window without
+                // raising it. Launching through a GAppInfo puts an
+                // xdg-activation token on the command line, which the
+                // Timesheet's GTK app picks up to bring its window forward
+                // instead.
+                let cmd = argv.map(a => GLib.shell_quote(a)).join(' ');
+                let info = Gio.AppInfo.create_from_commandline(cmd, 'Timesheet',
+                    Gio.AppInfoCreateFlags.SUPPORTS_STARTUP_NOTIFICATION);
+                info.launch([], button.get_display().get_app_launch_context());
+            } catch (e) {
+                console.error(`[ScreenTime] could not launch the timesheet: ${e.message}`);
+            }
         });
-
-        clientsGroup.add(new ShortcutRow(
-            settings, 'toggle-clock', 'Toggle the clock',
-            'Stops the clock, or starts the client you used last.'));
-
-        const nudgeRow = new Adw.SpinRow({
-            title: 'Nudge when idle',
-            subtitle: 'Minutes idle on the clock before a notification offers to stop it. 0 disables it.',
-            adjustment: new Gtk.Adjustment({ lower: 0, upper: 480, step_increment: 5 }),
-        });
-        settings.bind('clock-nudge-minutes', nudgeRow, 'value', Gio.SettingsBindFlags.DEFAULT);
-        clientsGroup.add(nudgeRow);
+        row.add_suffix(button);
+        row.activatable_widget = button;
+        group.add(row);
+        page.add(group);
     }
 }

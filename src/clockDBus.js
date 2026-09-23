@@ -219,8 +219,8 @@ export class ClockDBus {
             let exportable = selectExportable(sessions, clients);
             this._clock.markExported(exportable.map(s => s.id));
             // Closed sessions skipped because their client isn't on the
-            // list at all (deleted from Preferences, most likely). The
-            // window mentions this when it's non-zero.
+            // list at all (deleted from the Timesheet's Clients page, most
+            // likely). The window mentions this when it's non-zero.
             let skippedUnknown = countSkippedUnknown(sessions, clients);
             return JSON.stringify({
                 rows: rows.length, recorded: this._saved(), skippedUnknown,

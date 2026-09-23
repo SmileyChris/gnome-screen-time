@@ -2,10 +2,22 @@
 // (extension.js) and the Timesheet itself (timesheet.js), so the two cannot
 // drift apart. No imports, so plain gjs tests cover it.
 
+// Opens the Timesheet on its Clients page (the popup's "Add client…",
+// Preferences' "Clients & clock" row).
+export const CLIENTS_ARG = '--clients';
+
 const DAY_PREFIX = '--day=';
 
 export function dayArg(dayKey) {
     return `${DAY_PREFIX}${dayKey}`;
+}
+
+// The full argv for launching the Timesheet out of extensionDir, shared by
+// both launch sites (extension.js, prefs.js) so they cannot drift apart.
+export function timesheetArgv(extensionDir, { day = null, clients = false } = {}) {
+    return ['/usr/bin/gjs', '-m', `${extensionDir}/timesheet.js`,
+        ...(day ? [dayArg(day)] : []),
+        ...(clients ? [CLIENTS_ARG] : [])];
 }
 
 // The dayKey a --day=YYYY-MM-DD argument names, or null when there is none
@@ -26,4 +38,9 @@ export function dayFromArgs(args) {
         parsed.getUTCDate() !== date)
         return null;
     return day;
+}
+
+// Which page the command line asks for.
+export function pageFromArgs(args) {
+    return args.includes(CLIENTS_ARG) ? 'clients' : 'sessions';
 }

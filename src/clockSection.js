@@ -12,16 +12,16 @@ import { todayKeyFor } from './usageStore.js';
 // stop outright). The list doubles as the readout and the control, so there
 // is no separate start button. An icon after a name shows what tapping that
 // row does (pause the running client, resume the paused one), and a last
-// "Add client…" row opens Preferences.
+// "Add client…" row opens the Timesheet, where clients are managed.
 //
 // Rebuilt from scratch inside PopupWidget._build(), exactly like
 // AppTimerSection: _build() starts with menu.removeAll(), which destroys
 // every item, so this section holds no item references between builds.
 export class ClockSection {
-    constructor(clock, settings, openPrefs) {
+    constructor(clock, settings, onAddClient) {
         this._clock = clock;
         this._settings = settings;
-        this._openPrefs = openPrefs;
+        this._onAddClient = onAddClient;
     }
 
     // Appends one row per client to `menu`, then the "Add client…" row.
@@ -115,8 +115,8 @@ export class ClockSection {
 
         // Always the last row, even with no clients at all, so a fresh
         // install shows where clients come from. Clients are only created in
-        // Preferences (see prefs.js's _addClientsGroup), because the popup
-        // cannot take text input sanely.
+        // the Timesheet's Clients page (see clientsPage.js), because the
+        // popup cannot take text input sanely.
         let addRow = new St.BoxLayout({style: `padding: 4px 10px; width: ${ROW_W}px;`});
         addRow.add_child(new St.Label({
             text: 'Add client…',
@@ -124,12 +124,7 @@ export class ClockSection {
             y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 11px; font-weight: 500;',
         }));
-        this._rowButton(menu, addRow).connect('clicked', () => {
-            // Asks Preferences to focus its "Add a client" field (see
-            // prefs.js's _addClientsGroup).
-            this._settings.set_string('prefs-focus', 'add-client');
-            this._openPrefs?.();
-        });
+        this._rowButton(menu, addRow).connect('clicked', () => this._onAddClient?.());
     }
 
     // Wraps `row` in the button-in-item shape described above build() and
@@ -152,6 +147,6 @@ export class ClockSection {
     destroy() {
         this._clock = null;
         this._settings = null;
-        this._openPrefs = null;
+        this._onAddClient = null;
     }
 }

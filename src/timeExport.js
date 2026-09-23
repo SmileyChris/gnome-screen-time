@@ -75,12 +75,13 @@ export function selectExportable(sessions, clients) {
 
 // Closed sessions in `sessions` whose client isn't on the list at all,
 // active or not: the ones selectExportable() drops for their client. An
-// unknown client usually means it was deleted from Preferences (see
-// prefs.js's confirm-delete dialog and clients.js's isKnownClient) after
-// already being clocked against - its sessions still exist and would still
-// export in principle, but nothing here can put a name on their row any
-// more, so ExportPeriod surfaces this count for the Timesheet to mention
-// rather than letting them vanish from an export with no trace.
+// unknown client usually means it was deleted from the Timesheet's Clients
+// page (see clientsPage.js's confirm-delete dialog and clients.js's
+// isKnownClient) after already being clocked against - its sessions still
+// exist and would still export in principle, but nothing here can put a
+// name on their row any more, so ExportPeriod surfaces this count for the
+// Timesheet to mention rather than letting them vanish from an export with
+// no trace.
 export function countSkippedUnknown(sessions, clients) {
     let known = new Set(clients.map(c => c.name));
     return sessions.filter(session =>
