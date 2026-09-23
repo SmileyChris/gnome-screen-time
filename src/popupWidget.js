@@ -9,8 +9,8 @@ import { AppTimerSection } from './appTimerSection.js';
 import { ClockSection } from './clockSection.js';
 import { isKnownClient, pausedClient } from './clients.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
-import { makeRow, makeExpandableRow } from './usageRows.js';
-import { setAppName } from './appNames.js';
+import { makeRow, makeExpandableRow, addLongPress } from './usageRows.js';
+import { getAppNames, setAppName } from './appNames.js';
 
 const MAX_VISIBLE = 5;
 const MIN_ROW_SECONDS = 60;
@@ -75,7 +75,7 @@ function labelForKey(key, startHour) {
 }
 
 export class PopupWidget {
-    constructor(menu, store, settings, openPrefs, clock, onOpenTimesheet) {
+    constructor(menu, store, settings, openPrefs, clock, onOpenTimesheet, intervalLog) {
         this._menu = menu;
         this._store = store;
         this._settings = settings;
@@ -84,6 +84,8 @@ export class PopupWidget {
         // card (later tasks) both read these back off `this`.
         this._clock = clock;
         this._onOpenTimesheet = onOpenTimesheet;
+        // A getter: the log is created after the popup (see extension.js).
+        this._intervalLog = intervalLog;
         this._date = todayKeyFor(settings);
         this._timerSection = new AppTimerSection(store, settings);
         // The client list's "Add client…" row opens Preferences, the same
@@ -96,6 +98,15 @@ export class PopupWidget {
         // an edit lands where the user was. Cleared on reopen and date change.
         this._expanded = new Set();
         this._expandables = [];
+        // Whether the app rows show, once the Screen Time card was tapped;
+        // null leaves it to _appsShown(). Cleared on reopen.
+        this._showApps = null;
+        // Whether the app rows show only the active client's sessions
+        // rather than the whole day. Cleared on reopen.
+        this._clientView = false;
+        // Set while building the client view, whose rows are not editable:
+        // edits write the day's totals, which that view is not.
+        this._readOnly = false;
 
         this._build();
 
@@ -113,8 +124,45 @@ export class PopupWidget {
     _refresh() {
         this._date = todayKeyFor(this._settings);
         this._expanded.clear();
+        this._showApps = null;
+        this._clientView = false;
         this._timerSection.reset();
         this._build();
+    }
+
+    // The client whose clock is running or paused, on today only.
+    _activeClient() {
+        if (!this._clock || this._date !== todayKeyFor(this._settings))
+            return null;
+        let running = this._clock.running ?? null;
+        return running?.client ?? pausedClient(this._settings, running);
+    }
+
+    // The app rows start hidden while a client clock runs or is paused, when
+    // the clock card is what the popup is opened for.
+    _appsShown() {
+        return this._showApps ?? this._activeClient() === null;
+    }
+
+    // Screen time during `client`'s sessions today, from the interval log,
+    // shaped like UsageStore.getUsageForDate() with renames applied.
+    _clientUsage(client) {
+        let log = this._intervalLog?.();
+        if (!log)
+            return { all: [], total: 0 };
+        // Buffered intervals have not reached disk, and queries read files.
+        log.flushAll();
+        let now = Date.now();
+        let ranges = this._clock.sessionsForDay(this._date)
+            .filter(s => s.client === client)
+            .map(s => [s.startMs, s.endMs ?? now]);
+        let { seconds, entries } = log.queryRanges(ranges);
+        let names = getAppNames(this._settings);
+        for (let e of entries) {
+            e.trackedName = e.displayName;
+            e.displayName = names[e.appId] || e.displayName;
+        }
+        return { all: entries, total: seconds };
     }
 
     // How far back paging is allowed: every day in the retention window,
@@ -137,28 +185,44 @@ export class PopupWidget {
         this._addTotalCard(total);
         this._addSeparator();
 
-        if (all.length === 0) {
-            let empty = new PopupMenu.PopupBaseMenuItem({activate: false});
-            empty.track_hover = false;
-            empty.style = 'padding: 0;';
-            empty.add_child(new St.Label({
-                text: 'No data for this day',
-                opacity: DIM_OPACITY,
-                x_expand: true,
-                x_align: Clutter.ActorAlign.CENTER,
-                style: `font-size: 12px; padding: 14px; width: ${ROW_W}px;`,
-            }));
-            this._menu.addMenuItem(empty);
-        } else {
-            this._expandables = [];
-            this._addEntries(all, total, 0, []);
-            for (let { key, row } of this._expandables) {
-                if (this._expanded.has(key))
-                    row.expand();
+        // Hidden, the clock section follows the cards directly.
+        if (this._appsShown()) {
+            let client = this._activeClient();
+            this._readOnly = false;
+            if (client !== null) {
+                let usage = this._clientUsage(client);
+                this._addViewToggle(client, total, usage.total);
+                if (this._clientView)
+                    ({ all, total } = usage);
+                this._readOnly = this._clientView;
             }
-        }
+            if (all.length === 0) {
+                let empty = new PopupMenu.PopupBaseMenuItem({activate: false});
+                empty.track_hover = false;
+                empty.style = 'padding: 0;';
+                empty.add_child(new St.Label({
+                    text: this._readOnly
+                        ? `No screen time clocked to ${this._activeClient()} today`
+                        : 'No data for this day',
+                    opacity: DIM_OPACITY,
+                    x_expand: true,
+                    x_align: Clutter.ActorAlign.CENTER,
+                    // Same outer width as a row (ROW_W plus 10px a side),
+                    // so an empty view never widens the popup.
+                    style: `font-size: 12px; padding: 14px 10px; width: ${ROW_W}px;`,
+                }));
+                this._menu.addMenuItem(empty);
+            } else {
+                this._expandables = [];
+                this._addEntries(all, total, 0, []);
+                for (let { key, row } of this._expandables) {
+                    if (this._expanded.has(key))
+                        row.expand();
+                }
+            }
 
-        this._addSeparator();
+            this._addSeparator();
+        }
         // The clock rows are a live control showing today's hours, so they sit
         // under today's breakdown only; paging back to an earlier day hides them
         // rather than mixing two days under one date heading.
@@ -227,6 +291,42 @@ export class PopupWidget {
         this._menu.addMenuItem(item);
     }
 
+    // Above the app rows while a client clock runs or is paused: whether
+    // they cover the whole day or only that client's sessions (all of
+    // today's, not just the current one).
+    _addViewToggle(client, dayTotal, clientTotal) {
+        let item = new PopupMenu.PopupBaseMenuItem({activate: false});
+        item.track_hover = false;
+        item.style = 'padding: 0;';
+        let row = new St.BoxLayout({
+            x_expand: true,
+            style: 'padding: 2px 10px 4px 10px; spacing: 6px;',
+        });
+        let option = (text, clientView) => {
+            // Own label rather than `label:`, whose child is no St.Label, so
+            // a long client name can be ellipsized.
+            let label = new St.Label({text});
+            label.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+            let btn = new St.Button({
+                child: label,
+                style_class: 'button',
+                style: 'font-size: 10px; padding: 2px 10px;',
+                can_focus: true,
+                checked: this._clientView === clientView,
+                x_expand: true,
+            });
+            btn.connect('clicked', () => {
+                this._clientView = clientView;
+                this._build();
+            });
+            return btn;
+        };
+        row.add_child(option(`${formatTime(dayTotal)} total`, false));
+        row.add_child(option(`${formatTime(clientTotal)} ${client}`, true));
+        item.add_child(row);
+        this._menu.addMenuItem(item);
+    }
+
     _navButton(iconName, enabled, onClick) {
         let btn = new St.Button({
             child: new St.Icon({icon_name: iconName, icon_size: 14}),
@@ -252,7 +352,8 @@ export class PopupWidget {
             style: 'margin: 4px 10px 2px 10px;',
         });
 
-        // Left card: screen time, and the existing tap-to-flip-bars target.
+        // Left card: screen time. A tap shows or hides the app rows; a long
+        // press flips what the bars and percentages compare against.
         let tier = tierFor(total);
         let screen = new St.BoxLayout({
             vertical: true,
@@ -272,10 +373,17 @@ export class PopupWidget {
         screen.connect('notify::hover', () => {
             screen.style = cardStyle(tier, screen.hover);
         });
-        // Clicking it flips what the row percentages compare against.
-        screen.connect('button-release-event', () => {
+        let press = addLongPress(screen, () => {
             this._settings.set_string('percent-basis',
                 this._percentBasis() === 'largest' ? 'total' : 'largest');
+            this._build();
+        });
+        screen.connect('button-release-event', () => {
+            if (press.pressed) {
+                press.pressed = false;   // the release that ended a long press
+                return Clutter.EVENT_STOP;
+            }
+            this._showApps = !this._appsShown();
             this._build();
             return Clutter.EVENT_STOP;
         });
@@ -532,7 +640,7 @@ export class PopupWidget {
     _addLeaf(opts, path, parentTotal) {
         let row = makeRow({
             ...opts,
-            editable: {
+            editable: this._readOnly ? null : {
                 parentTotal,
                 onSave: seconds => {
                     this._store.setDirectSeconds(this._date, path, seconds);
@@ -561,7 +669,7 @@ export class PopupWidget {
         };
         // Only level-1 apps are renamed: their ids are unique on their own,
         // where a child's is only unique under its parent.
-        if (depth === 0) {
+        if (depth === 0 && !this._readOnly) {
             opts.rename = {
                 renamed: entry.displayName !== entry.trackedName,
                 trackedName: entry.trackedName,
@@ -586,11 +694,11 @@ export class PopupWidget {
             },
             // Holding a parent opens it and shows its direct-time row even
             // at zero, since parents themselves are not edited.
-            onLongPress: () => {
+            onLongPress: this._readOnly ? null : () => {
                 row.expand();
                 kids?.noBreakdown?.reveal();
             },
-            onDelete: () => {
+            onDelete: this._readOnly ? null : () => {
                 this._store.removeNode(this._date, path);
                 this._build();
             },

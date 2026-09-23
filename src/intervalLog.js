@@ -187,6 +187,12 @@ export class IntervalLog {
     // Every stored record overlapping [fromMs, toMs], clipped to it, folded
     // into the same tree shape UsageStore.getUsageForDate returns.
     query(fromMs, toMs) {
+        return this.queryRanges([[fromMs, toMs]]);
+    }
+
+    // query() over several [fromMs, toMs] ranges folded into one tree, such
+    // as a client's sessions in a day. Overlapping ranges count twice.
+    queryRanges(ranges) {
         let root = {};
         // The earliest clipped interval start seen, in original (unrounded)
         // ms - "the first thing that was actually on screen in range",
@@ -195,17 +201,19 @@ export class IntervalLog {
         // the tree only keeps totals per app/activity, not per-interval
         // start times.
         let firstMs = null;
-        for (let key of this._keysInRange(fromMs, toMs)) {
-            for (let row of this._readDay(key)) {
-                let rec = decodeLine(row);
-                let s = Math.max(rec.s, fromMs);
-                let e = Math.min(rec.e, toMs);
-                if (e <= s)
-                    continue;
-                if (firstMs === null || s < firstMs)
-                    firstMs = s;
-                let secs = (e - s) / 1000;
-                this._credit(root, rec, secs);
+        for (let [fromMs, toMs] of ranges) {
+            for (let key of this._keysInRange(fromMs, toMs)) {
+                for (let row of this._readDay(key)) {
+                    let rec = decodeLine(row);
+                    let s = Math.max(rec.s, fromMs);
+                    let e = Math.min(rec.e, toMs);
+                    if (e <= s)
+                        continue;
+                    if (firstMs === null || s < firstMs)
+                        firstMs = s;
+                    let secs = (e - s) / 1000;
+                    this._credit(root, rec, secs);
+                }
             }
         }
         // Clipping produces fractional seconds; round bottom-up so a parent

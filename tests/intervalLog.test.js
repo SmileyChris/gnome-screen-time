@@ -162,6 +162,20 @@ test('IntervalLog: query clips intervals straddling the range edges', () => {
     log.destroy();
 });
 
+test('IntervalLog: queryRanges folds several ranges into one tree', () => {
+    let log = freshLog();
+    let base = at(2026, 9, 11, 10);
+    log.record(base, base + 60000, ['a'], ['A']);
+    log.record(base + 60000, base + 120000, ['b'], ['B']);
+    log.flushAll();
+    let { seconds, entries } = log.queryRanges([
+        [base, base + 10000], [base + 50000, base + 70000],
+    ]);
+    assertEqual(seconds, 30, 'the gap between the ranges is left out');
+    assertEqual(entries.map(e => [e.appId, e.seconds]), [['a', 20], ['b', 10]]);
+    log.destroy();
+});
+
 test('IntervalLog: query returns nothing for a range with no overlap', () => {
     let log = freshLog();
     let base = at(2026, 9, 11, 10);

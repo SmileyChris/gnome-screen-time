@@ -113,7 +113,7 @@ export default class ScreenTimeExtension extends Extension {
             this._indicator.addToPanel(this.uuid);
             this._popup = new PopupWidget(this._indicator.menu, this._store,
                 this._settings, () => this._openPrefs(), this._clock,
-                day => this._openTimesheet(day));
+                day => this._openTimesheet(day), () => this._intervals);
 
             // The browser companion pushes into this source over D-Bus; the same
             // instance sits in the registry the tracker reads from.
