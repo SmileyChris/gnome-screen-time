@@ -87,10 +87,11 @@ const LIVE_TICK_SECONDS = 30;
 function sessionTimes(session) {
     let end = session.endMs === null ? 'now' : clockOf(session.endMs);
     let actual = actualHoursOf(session);
-    let times = `${clockOf(session.startMs)}–${end}   `;
+    let times = `${clockOf(session.startMs)}–${end}  ${actual.toFixed(2)}h`;
+    // Actual first, then what it was adjusted to, read left to right.
     if (hasBilledHours(session))
-        return `${times}${hoursOf(session).toFixed(2)} h  ←  ${actual.toFixed(2)} h`;
-    return `${times}${actual.toFixed(2)} h`;
+        return `${times} → ${hoursOf(session).toFixed(2)}h`;
+    return times;
 }
 
 // What the subtitle still carries: only the flags, empty for most rows.
