@@ -7,7 +7,7 @@ import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ClockSection } from './clockSection.js';
-import { isKnownClient, pausedClient } from './clients.js';
+import { isKnownClient, lastProject, pausedClient } from './clients.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow, addLongPress } from './usageRows.js';
 import { getAppNames, setAppName } from './appNames.js';
@@ -409,6 +409,9 @@ export class PopupWidget {
         let resumable = isToday && this._clock ? pausedClient(this._settings, running) : null;
         let paused = resumable !== null;
         let client = running?.client ?? resumable;
+        // The running session's project, or the one a resume would restart.
+        let project = running ? running.project
+            : resumable !== null ? lastProject(this._settings, resumable) : null;
         let canToggle = client !== null;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.
@@ -439,7 +442,8 @@ export class PopupWidget {
         // that width, so each takes its own share off the cap.
         let titleRow = new St.BoxLayout({style: 'spacing: 2px;'});
         let title = new St.Label({
-            text: client ?? (isToday ? 'Clocked today' : 'Clocked'),
+            text: client !== null ? (project ? `${client} · ${project}` : client)
+                : (isToday ? 'Clocked today' : 'Clocked'),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
@@ -459,7 +463,7 @@ export class PopupWidget {
                 if (this._clock.running) {
                     this._clock.stop();
                 } else if (isKnownClient(this._settings, last)) {
-                    this._clock.start(last);
+                    this._clock.start(last, Date.now(), { project: lastProject(this._settings, last) });
                     resumed = true;
                 }
             } catch (e) {
@@ -480,6 +484,7 @@ export class PopupWidget {
                 // Only once stop() has not thrown: a failed stop leaves the
                 // session running, and it stays resumable.
                 this._settings.set_string('last-client', '');
+                this._settings.set_string('last-project', '');
             } catch (e) {
                 console.error(`[ScreenTime] clock stop failed: ${e.message}`);
             } finally {
