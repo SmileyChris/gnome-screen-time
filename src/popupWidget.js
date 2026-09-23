@@ -414,6 +414,16 @@ export class PopupWidget {
         let project = running ? running.project
             : resumable !== null ? lastProject(this._settings, resumable) : null;
         let canToggle = client !== null;
+        // Which session the note button (below) opens: the one actually
+        // running, or - while paused - the client's latest session today
+        // (sessionsForDay() sorts by startMs, so the last one is the
+        // latest), since a note written now belongs to that one. Null
+        // whenever there's nothing to toggle, which is also when no button
+        // shows at all: the clock's stopped, or this is an earlier day.
+        let noteSessionId = running ? running.id
+            : paused ? this._clock.sessionsForDay(this._date)
+                .filter(s => s.client === client).at(-1)?.id ?? null
+            : null;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.
         let figure = !this._clock ? 0
@@ -546,6 +556,28 @@ export class PopupWidget {
         }
         clock.add_child(figureRow);
 
+        // A small note button at the card's bottom-left, its own row below
+        // the figure so it never shares a line with the title's buttons or
+        // widens the card - capped the same way the figure row is. It
+        // closes the popup and opens the Timesheet with this session
+        // already expanded and its Note field focused, so a thought that
+        // occurs to you here doesn't have to survive an extra "which
+        // session was that" once the Timesheet's open.
+        let noteButton = noteSessionId !== null
+            ? cardButton('document-edit-symbolic', 'Note', () => {
+                this._menu.close();
+                this._onOpenTimesheet?.({ note: noteSessionId });
+            })
+            : null;
+        if (noteButton) {
+            let noteRow = new St.BoxLayout({
+                x_align: Clutter.ActorAlign.START,
+                style: `max-width: ${Math.round(ROW_W / 2) - 36}px;`,
+            });
+            noteRow.add_child(noteButton);
+            clock.add_child(noteRow);
+        }
+
         if (tappable) {
             // Same inline-gradient hover swap as the screen time card.
             clock.connect('notify::hover', () => {
@@ -555,9 +587,10 @@ export class PopupWidget {
                 if (opensTimesheet) {
                     this._menu.close();
                     this._onOpenTimesheet?.({ day: this._date });
-                } else if (!buttons.some(btn => btn.hover)) {
-                    // A release over a button is that button's click, not a
-                    // tap on the card around it.
+                } else if (!buttons.some(btn => btn.hover) && !noteButton?.hover) {
+                    // A release over a button (pause/play/stop, or the note
+                    // button in its own row below) is that button's click,
+                    // not a tap on the card around it.
                     toggle();
                 }
                 return Clutter.EVENT_STOP;

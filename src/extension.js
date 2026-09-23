@@ -303,12 +303,13 @@ export default class ScreenTimeExtension extends Extension {
     // frequently minimal, which is the same trap the zellij lookup hits.
     // Never wait() on this subprocess: it would block the compositor.
     // `day` (a dayKey, or null) scrolls the Timesheet to that day; `clients`
-    // opens it on the Clients page. An already-open Timesheet gets both too,
-    // since the new process hands its command line over and exits (see
-    // timesheet.js).
-    _openTimesheet({ day = null, clients = false } = {}) {
+    // opens it on the Clients page; `note` (a session id, or null) is the
+    // popup's note button, which expands that session and focuses its Note
+    // field. An already-open Timesheet gets all of these too, since the new
+    // process hands its command line over and exits (see timesheet.js).
+    _openTimesheet({ day = null, clients = false, note = null } = {}) {
         try {
-            let argv = timesheetArgv(this.path, { day, clients });
+            let argv = timesheetArgv(this.path, { day, clients, note });
             // A plain Gio.Subprocess carries no activation token, so Mutter's
             // focus-stealing prevention maps the window without raising it.
             // Launching through a GAppInfo puts an xdg-activation token on

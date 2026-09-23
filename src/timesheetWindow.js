@@ -224,6 +224,13 @@ export class TimesheetWindow {
         // The day showDay() asked to scroll to, held until the list has
         // been drawn (see _scrollToPendingDaySoon()).
         this._pendingDay = null;
+        // showNote()'s request (the popup's note button): the session id
+        // whose day still needs resolving against a freshly loaded
+        // _sessions, and the "<id>:note" key to hand to _restoreFocus()
+        // once that session's row has been rebuilt expanded. Both are
+        // cleared by refresh() once acted on.
+        this._pendingNoteId = null;
+        this._pendingFocus = null;
         this._refreshing = false;
         this._refreshPending = false;
         // refresh() tears down and rebuilds every row from the server's
@@ -401,6 +408,11 @@ export class TimesheetWindow {
         // person is sitting in has to be found now, before it is torn down
         // below - get_focus() can no longer answer this once it's gone.
         let focusedKey = this._focusedFieldKey();
+        // Whether this pass got as far as fetching sessions - a transient
+        // D-Bus failure must leave _pendingFocus (like _pendingNoteId
+        // above) for the next successful refresh() to act on, rather than
+        // being spent here on a rebuild that never happened.
+        let sessionsLoaded = false;
         try {
             for (let group of this._groups.splice(0))
                 this._page.remove(group);
@@ -437,6 +449,20 @@ export class TimesheetWindow {
             // so it needs the whole fetched window, not just one day's
             // group.
             this._sessions = sessions;
+            sessionsLoaded = true;
+
+            // showNote()'s day is only knowable once sessions are in hand,
+            // so it's resolved here rather than there - covering both a
+            // request made before this first load and one made against an
+            // already-loaded list. A stale or unknown id (the session was
+            // deleted, or the popup passed a bad one) just leaves the day
+            // wherever it already was.
+            if (this._pendingNoteId) {
+                let noted = sessions.find(s => s.id === this._pendingNoteId);
+                if (noted)
+                    this._pendingDay = noted.dayKey;
+                this._pendingNoteId = null;
+            }
 
             // Drop state for sessions that fell out of the 30-day window or
             // were deleted, so this never grows without bound and a stale
@@ -488,8 +514,14 @@ export class TimesheetWindow {
             // Rows that were expanded re-fetch their evidence synchronously
             // as they're rebuilt above (_sessionRow re-expands them, which
             // fires _fillEvidence inline), so the field named by focusedKey
-            // already exists again by this point if it's coming back at all.
-            this._restoreFocus(focusedKey);
+            // (or, for showNote()'s request, _pendingFocus) already exists
+            // again by this point if it's coming back at all. showNote()'s
+            // own request for focus wins over whatever merely had focus
+            // before this rebuild, and is only spent once a rebuild has
+            // actually had the chance to satisfy it.
+            this._restoreFocus(this._pendingFocus ?? focusedKey);
+            if (sessionsLoaded)
+                this._pendingFocus = null;
         }
     }
 
@@ -538,6 +570,21 @@ export class TimesheetWindow {
     showDay(dayKey) {
         this._pendingDay = dayKey;
         this._scrollToPendingDaySoon();
+    }
+
+    // The popup's note button (its clock card, via popupWidget.js): switch
+    // to Sessions, expand `id`'s row and focus its Note field. The day it
+    // scrolls to isn't known until refresh() has _sessions to look it up
+    // in, so that part - and the actual focus grab, once the row exists -
+    // happens there; this only records the request and asks for the
+    // rebuild that applies it, which _expandedIds alone never triggers on
+    // its own for a row that already exists collapsed.
+    showNote(id) {
+        this._stack.visible_child_name = 'sessions';
+        this._expandedIds.add(id);
+        this._pendingNoteId = id;
+        this._pendingFocus = `${id}:note`;
+        this.refresh();
     }
 
     // Switches to `name`'s page; on Clients, the add field takes focus so a
