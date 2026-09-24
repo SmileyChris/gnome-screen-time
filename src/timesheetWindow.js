@@ -95,6 +95,14 @@ function sessionFlags(session) {
     return flags.join(' · ');
 }
 
+// Whether an activity line would read something other than "0m" (see
+// formatHours, which rounds to whole minutes). Shorter ones say nothing, so
+// the Activities block leaves them out; their time still counts in their
+// parent's figure.
+function showsMinutes(seconds) {
+    return Math.round(seconds / 60) > 0;
+}
+
 // Decimal hours for anything being billed; h/m for anything being read.
 // Rounds to whole minutes first, then derives hours and minutes from that
 // total - rounding each of h and m independently let 3599s print as "60m"
@@ -757,7 +765,8 @@ export class TimesheetWindow {
         let [billRow, noteRow] = this._adjustRows(session, draft);
         if (billRow)
             row.add_row(billRow);
-        if (evidence.entries.length > 0 || evidence.unattributedSeconds > 0)
+        if (evidence.entries.some(e => showsMinutes(e.seconds)) ||
+            showsMinutes(evidence.unattributedSeconds))
             row.add_row(this._activityRow(session, evidence));
         row.add_row(noteRow);
     }
@@ -992,6 +1001,8 @@ export class TimesheetWindow {
             margin_top: 4,
         });
         let add = (node, depth) => {
+            if (!showsMinutes(node.seconds))
+                return;
             lines.append(activityLine(node.displayName, node.seconds, depth));
             Object.values(node.children ?? {})
                 .sort((a, b) => b.seconds - a.seconds)
@@ -999,7 +1010,7 @@ export class TimesheetWindow {
         };
         for (let entry of evidence.entries)
             add(entry, 0);
-        if (evidence.unattributedSeconds > 0) {
+        if (showsMinutes(evidence.unattributedSeconds)) {
             let unattributed = activityLine('Unattributed', evidence.unattributedSeconds, 0);
             unattributed.add_css_class('dim-label');
             unattributed.tooltip_text = 'No focused window, or away. ' +
