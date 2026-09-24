@@ -551,13 +551,13 @@ export class PopupWidget {
         // the Timesheet with this session already expanded and its Note
         // field focused, so a thought that occurs to you here doesn't have
         // to survive an extra "which session was that" once the Timesheet's
-        // open.
+        // open. Its label says whether there is a note yet, so an empty
+        // one invites a first note rather than looking like the way to
+        // read one.
         let noteButton = noteSessionId !== null
             ? cardButton('document-edit-symbolic', 'Note', () => {
                 this._menu.close();
                 this._onOpenTimesheet?.({ note: noteSessionId });
-            // Says whether there is a note yet, so an empty one invites a
-            // first note rather than looking like the button to read one.
             }, noteSession.description.trim() ? 'Edit' : 'Add')
             : null;
 
