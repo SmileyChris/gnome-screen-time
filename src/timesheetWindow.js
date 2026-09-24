@@ -780,7 +780,10 @@ export class TimesheetWindow {
         // what the user has and hasn't touched yet.
         let draft = this._draftFor(session);
 
-        row.add_row(this._timeRow(session, evidence, draft));
+        // A running session's start is already on its title line, and it
+        // is edited once the session stops, so it gets no Started line.
+        if (session.endMs !== null)
+            row.add_row(this._timeRow(session, evidence, draft));
 
         let projectRow = this._projectRow(session);
         if (projectRow)
@@ -799,42 +802,25 @@ export class TimesheetWindow {
 
     // Started and Ended on one line: two Adw.EntryRows for what's each just
     // a few characters of HH:MM spent twice the vertical space the values
-    // need. A still-running session (no Ended yet anyway) shows its start
-    // as plain, read-only text rather than an editable entry - it can still
-    // move later (a snap once the session stops, another client's edit), so
-    // editing it is only offered once the session has actually stopped.
+    // need. Only for a stopped session (see _fillEvidence).
     _timeRow(session, evidence, draft) {
         let box = new Gtk.Box({
             spacing: 6,
             margin_top: 8, margin_bottom: 8, margin_start: 12, margin_end: 12,
         });
-        let running = session.endMs === null;
-
         box.append(new Gtk.Label({
             label: 'Started', css_classes: ['caption', 'dim-label'], valign: Gtk.Align.CENTER,
         }));
-        if (running) {
-            box.append(new Gtk.Label({
-                label: clockOf(session.startMs), valign: Gtk.Align.CENTER,
-            }));
-        } else {
-            this._timeField(box, session, evidence, draft, 'start');
-        }
-
-        if (!running) {
-            box.append(new Gtk.Box({ hexpand: true }));
-            box.append(new Gtk.Label({
-                label: 'Ended', css_classes: ['caption', 'dim-label'], valign: Gtk.Align.CENTER,
-            }));
-            this._timeField(box, session, evidence, draft, 'end');
-        }
-
+        this._timeField(box, session, evidence, draft, 'start');
+        box.append(new Gtk.Box({ hexpand: true }));
+        box.append(new Gtk.Label({
+            label: 'Ended', css_classes: ['caption', 'dim-label'], valign: Gtk.Align.CENTER,
+        }));
+        this._timeField(box, session, evidence, draft, 'end');
         return new Adw.PreferencesRow({ activatable: false, child: box });
     }
 
-    // Appends one editable HH:MM entry (plus, for "start", its Snap
-    // buttons) to `box` - the part of _timeRow a running session skips
-    // entirely for "start", since it never has an "end" to skip it for.
+    // Appends one editable HH:MM entry, with its snap arrows, to `box`.
     //
     // Backed by `draft` (see _draftFor) rather than the session directly:
     // text the user has typed but not yet sent (no Enter or focus-out yet)
