@@ -498,19 +498,14 @@ export class TimesheetWindow {
             }
 
             for (let [dayKey, daySessions] of [...byDay].reverse()) {
-                // One client's hours, or the total of several, on the
-                // date's line, at the right like each session's times;
-                // several clients' hours go under it. timesheetSummary.js
-                // rounds them the same way the export rounds its rows.
+                // One client's hours, or the total of several, right after
+                // the date; several clients' hours go under it.
+                // timesheetSummary.js rounds them the same way the export
+                // rounds its rows.
                 let { inline, below } = dayHeading(daySessions);
                 let group = new Adw.PreferencesGroup({
-                    title: dayKey,
+                    title: inline ? `${dayKey} · ${inline}` : dayKey,
                     description: below,
-                    header_suffix: new Gtk.Label({
-                        label: inline,
-                        valign: Gtk.Align.END,
-                        css_classes: ['dim-label', 'numeric'],
-                    }),
                 });
                 for (let session of daySessions)
                     group.add(this._sessionRow(session));
