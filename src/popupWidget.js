@@ -420,10 +420,10 @@ export class PopupWidget {
         // latest), since a note written now belongs to that one. Null
         // whenever there's nothing to toggle, which is also when no button
         // shows at all: the clock's stopped, or this is an earlier day.
-        let noteSessionId = running ? running.id
-            : paused ? this._clock.sessionsForDay(this._date)
-                .filter(s => s.client === client).at(-1)?.id ?? null
-            : null;
+        let noteSession = running
+            ?? (paused ? this._clock.sessionsForDay(this._date)
+                .filter(s => s.client === client).at(-1) ?? null : null);
+        let noteSessionId = noteSession?.id ?? null;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.
         let figure = !this._clock ? 0
@@ -556,7 +556,9 @@ export class PopupWidget {
             ? cardButton('document-edit-symbolic', 'Note', () => {
                 this._menu.close();
                 this._onOpenTimesheet?.({ note: noteSessionId });
-            }, 'Note')
+            // Says whether there is a note yet, so an empty one invites a
+            // first note rather than looking like the button to read one.
+            }, noteSession.description.trim() ? 'Edit' : 'Add')
             : null;
 
         let figureRow = new St.BoxLayout({
