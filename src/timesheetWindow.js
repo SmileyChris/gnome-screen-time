@@ -502,10 +502,16 @@ export class TimesheetWindow {
                 // the date; several clients' hours go under it.
                 // timesheetSummary.js rounds them the same way the export
                 // rounds its rows.
+                // The group's title and description are Pango markup: the
+                // figure is set in normal weight beside the bold date, and
+                // client names are escaped so an & or < shows as typed.
                 let { inline, below } = dayHeading(daySessions);
+                let escape = text => GLib.markup_escape_text(text, -1);
                 let group = new Adw.PreferencesGroup({
-                    title: inline ? `${dayKey} · ${inline}` : dayKey,
-                    description: below,
+                    title: inline
+                        ? `${dayKey} <span weight="normal">· ${escape(inline)}</span>`
+                        : dayKey,
+                    description: escape(below),
                 });
                 for (let session of daySessions)
                     group.add(this._sessionRow(session));
