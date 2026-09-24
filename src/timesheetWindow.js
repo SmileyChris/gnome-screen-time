@@ -70,6 +70,19 @@ function clockOf(ms) {
 // current.
 const LIVE_TICK_SECONDS = 30;
 
+// The first widget under `widget` (depth first) that `test` accepts, for
+// reaching into a libadwaita row's own children.
+function findDescendant(widget, test) {
+    for (let child = widget.get_first_child(); child; child = child.get_next_sibling()) {
+        if (test(child))
+            return child;
+        let found = findDescendant(child, test);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
 // A session row's times, shown at the right of its title line so a row
 // takes one line unless it has something to flag. _tickLive() recomputes
 // it for a running session: actualHoursOf() reads Date.now() fresh.
@@ -186,6 +199,9 @@ export class TimesheetWindow {
             // rounded bottom edge.
             'list.boxed-list > row.session-row.with-note:last-child row.header ' +
             '{ border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom-width: 1px; }' +
+            // The running session's stopwatch, in the arrow's place, dimmed
+            // like the arrow it replaces.
+            'row.session-row.running image.expander-row-arrow { opacity: 0.55; }' +
             'list.boxed-list > row.session-row:last-child .session-note ' +
             '{ border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }');
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
@@ -700,19 +716,7 @@ export class TimesheetWindow {
             label: sessionTimes(session),
             css_classes: ['dim-label', 'numeric'],
         });
-        // The session still on the clock gets the panel's stopwatch before
-        // its times, so it stands out from the finished ones. One suffix
-        // holding both: the row does not keep separate suffixes in the
-        // order they were added.
-        let suffix = new Gtk.Box({ spacing: 6 });
-        if (session.endMs === null) {
-            suffix.append(new Gtk.Image({
-                icon_name: 'screen-time-tracking-symbolic',
-                css_classes: ['dim-label'],
-            }));
-        }
-        suffix.append(times);
-        row.add_suffix(suffix);
+        row.add_suffix(times);
 
         // Bookkeeping for _tickLive(): only a still-running session's
         // times go stale between refreshes (nothing mutates the clock just
@@ -741,6 +745,26 @@ export class TimesheetWindow {
         // evidence, same as a first-time expand.
         if (this._expandedIds.has(session.id))
             row.expanded = true;
+
+        // The session still on the clock is always open - its note is the
+        // one being written - so it can't be collapsed, and the panel's
+        // stopwatch takes the place of its arrow. libadwaita draws an open
+        // row's arrow unrotated, so the stopwatch stands upright.
+        if (session.endMs === null) {
+            row.add_css_class('running');
+            let header = row.get_first_child()?.get_first_child()?.get_first_child();
+            if (header)
+                header.activatable = false;
+            let arrow = findDescendant(row, w =>
+                w instanceof Gtk.Image && w.has_css_class('expander-row-arrow'));
+            if (arrow)
+                arrow.icon_name = 'screen-time-tracking-symbolic';
+            row.expanded = true;
+            row.connect('notify::expanded', () => {
+                if (!row.expanded)
+                    row.expanded = true;
+            });
+        }
         return row;
     }
 
