@@ -7,7 +7,7 @@ import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey, OTHER_KEY, sortedChildren } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ClockSection } from './clockSection.js';
-import { isKnownClient, pausedClient } from './clients.js';
+import { isKnownClient, lastProject, pausedClient } from './clients.js';
 import { ROW_W, DIM_OPACITY } from './usageBar.js';
 import { makeRow, makeExpandableRow, addLongPress } from './usageRows.js';
 import { getAppNames, setAppName } from './appNames.js';
@@ -127,6 +127,7 @@ export class PopupWidget {
         this._showApps = null;
         this._clientView = false;
         this._timerSection.reset();
+        this._clockSection.reset();
         this._build();
     }
 
@@ -409,7 +410,20 @@ export class PopupWidget {
         let resumable = isToday && this._clock ? pausedClient(this._settings, running) : null;
         let paused = resumable !== null;
         let client = running?.client ?? resumable;
+        // The running session's project, or the one a resume would restart.
+        let project = running ? running.project
+            : resumable !== null ? lastProject(this._settings, resumable) : null;
         let canToggle = client !== null;
+        // Which session the note button (below) opens: the one actually
+        // running, or - while paused - the client's latest session today
+        // (sessionsForDay() sorts by startMs, so the last one is the
+        // latest), since a note written now belongs to that one. Null
+        // whenever there's nothing to toggle, which is also when no button
+        // shows at all: the clock's stopped, or this is an earlier day.
+        let noteSession = running
+            ?? (paused ? this._clock.sessionsForDay(this._date)
+                .filter(s => s.client === client).at(-1) ?? null : null);
+        let noteSessionId = noteSession?.id ?? null;
         // Same rules as the clock rows below and the day total, so the card
         // can never disagree with either.
         let figure = !this._clock ? 0
@@ -439,7 +453,8 @@ export class PopupWidget {
         // that width, so each takes its own share off the cap.
         let titleRow = new St.BoxLayout({style: 'spacing: 2px;'});
         let title = new St.Label({
-            text: client ?? (isToday ? 'Clocked today' : 'Clocked'),
+            text: client !== null ? (project ? `${client} · ${project}` : client)
+                : (isToday ? 'Clocked today' : 'Clocked'),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
@@ -459,7 +474,7 @@ export class PopupWidget {
                 if (this._clock.running) {
                     this._clock.stop();
                 } else if (isKnownClient(this._settings, last)) {
-                    this._clock.start(last);
+                    this._clock.start(last, Date.now(), { project: lastProject(this._settings, last) });
                     resumed = true;
                 }
             } catch (e) {
@@ -480,19 +495,32 @@ export class PopupWidget {
                 // Only once stop() has not thrown: a failed stop leaves the
                 // session running, and it stays resumable.
                 this._settings.set_string('last-client', '');
+                this._settings.set_string('last-project', '');
             } catch (e) {
                 console.error(`[ScreenTime] clock stop failed: ${e.message}`);
             } finally {
                 this._build();
             }
         };
-        let cardButton = (iconName, name, onClick) => {
+        // `text`, when given, is shown before the icon.
+        let cardButton = (iconName, name, onClick, text = null) => {
+            let icon = new St.Icon({
+                icon_name: iconName,
+                icon_size: 12,
+                style: `color: ${CARD_FG};`,
+            });
+            let child = icon;
+            if (text) {
+                child = new St.BoxLayout({ style: 'spacing: 4px; padding-left: 4px;' });
+                child.add_child(new St.Label({
+                    text,
+                    y_align: Clutter.ActorAlign.CENTER,
+                    style: `font-size: 10px; color: ${CARD_FG};`,
+                }));
+                child.add_child(icon);
+            }
             let btn = new St.Button({
-                child: new St.Icon({
-                    icon_name: iconName,
-                    icon_size: 12,
-                    style: `color: ${CARD_FG};`,
-                }),
+                child,
                 can_focus: true,
                 accessible_name: name,
                 y_align: Clutter.ActorAlign.CENTER,
@@ -518,6 +546,21 @@ export class PopupWidget {
         // sessions today the two differ, so a small count after the figure
         // says why. Capped like the title, so it can never widen the card:
         // the count ellipsizes before the figure gives up any room.
+        // A small note button at the card's bottom-right, on the figure's
+        // line so the card keeps its size. It closes the popup and opens
+        // the Timesheet with this session already expanded and its Note
+        // field focused, so a thought that occurs to you here doesn't have
+        // to survive an extra "which session was that" once the Timesheet's
+        // open. Its label says whether there is a note yet, so an empty
+        // one invites a first note rather than looking like the way to
+        // read one.
+        let noteButton = noteSessionId !== null
+            ? cardButton('document-edit-symbolic', 'Note', () => {
+                this._menu.close();
+                this._onOpenTimesheet?.({ note: noteSessionId });
+            }, noteSession.description.trim() ? 'Edit' : 'Add')
+            : null;
+
         let figureRow = new St.BoxLayout({
             style: `spacing: 5px; max-width: ${Math.round(ROW_W / 2) - 36}px;`,
         });
@@ -538,6 +581,11 @@ export class PopupWidget {
             count.clutter_text.ellipsize = Pango.EllipsizeMode.END;
             figureRow.add_child(count);
         }
+        if (noteButton) {
+            figureRow.add_child(new St.Widget({ x_expand: true }));
+            noteButton.y_align = Clutter.ActorAlign.END;
+            figureRow.add_child(noteButton);
+        }
         clock.add_child(figureRow);
 
         if (tappable) {
@@ -549,9 +597,10 @@ export class PopupWidget {
                 if (opensTimesheet) {
                     this._menu.close();
                     this._onOpenTimesheet?.({ day: this._date });
-                } else if (!buttons.some(btn => btn.hover)) {
-                    // A release over a button is that button's click, not a
-                    // tap on the card around it.
+                } else if (!buttons.some(btn => btn.hover) && !noteButton?.hover) {
+                    // A release over a button (pause/play/stop, or the note
+                    // button in its own row below) is that button's click,
+                    // not a tap on the card around it.
                     toggle();
                 }
                 return Clutter.EVENT_STOP;

@@ -2061,3 +2061,88 @@ test('ClockStore: start with resume: false always starts a new session', () => {
     assert(again.id !== first.id, 'the trim flows cut a gap out on purpose');
     clock.destroy();
 });
+
+// --- project: sessions carry an optional project ---
+
+test('ClockStore: start records a project, General by default', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9);
+    assertEqual(clock.start('ACME', t).project, null);
+    clock.stop(t + 120000);
+    assertEqual(clock.start('ACME', t + 600000, { project: 'Site' }).project, 'Site');
+    clock.destroy();
+});
+
+test('ClockStore: switching project on the same client opens a new session', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9);
+    let first = clock.start('ACME', t, { project: 'Site' });
+    let second = clock.start('ACME', t + 600000, { project: 'App' });
+    assert(first !== second, 'a different project is a different session');
+    assertEqual(first.endMs, t + 600000);
+    assertEqual(clock.running.project, 'App');
+    assert(clock.start('ACME', t + 700000, { project: 'App' }) === second,
+        'the same client and project is already running');
+    clock.destroy();
+});
+
+test('ClockStore: a quick resume only continues the same project', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9);
+    let site = clock.start('ACME', t, { project: 'Site' });
+    clock.stop(t + 600000);
+    let general = clock.start('ACME', t + 610000);
+    assert(general !== site, 'General does not continue Site');
+    clock.stop(t + 1200000);
+    assert(clock.start('ACME', t + 1210000) === general, 'General continues General');
+    clock.destroy();
+});
+
+test('ClockStore: update changes a session\'s project, and rejects a blank one', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9);
+    let s = clock.start('ACME', t);
+    clock.stop(t + 600000);
+    assertEqual(clock.update(s.id, { project: 'Site' }).project, 'Site');
+    assertEqual(clock.update(s.id, { project: null }).project, null);
+    let threw = false;
+    try {
+        clock.update(s.id, { project: '  ' });
+    } catch {
+        threw = true;
+    }
+    assert(threw, 'blank project is invalid');
+    clock.destroy();
+});
+
+test('ClockStore: billedSecondsByProject splits a client\'s day', () => {
+    let clock = freshClock();
+    let t = at(2026, 9, 11, 9);
+    clock.start('ACME', t);
+    clock.start('ACME', t + 600000, { project: 'Site' });
+    clock.start('BETA', t + 1800000);
+    clock.stop(t + 2400000);
+    let byProject = clock.billedSecondsByProject('2026-09-11', 'ACME');
+    assertEqual([...byProject], [[null, 600], ['Site', 1200]]);
+    clock.destroy();
+});
+
+test('ClockStore: a stored session with no project field loads as General', () => {
+    GLib.unlink(CLOCK_FILE);
+    let t = at(2026, 9, 11, 9);
+    let clock = new ClockStore(new FakeSettings());
+    let s = clock.start('ACME', t);
+    clock.stop(t + 600000);
+    clock.destroy();
+    // Rewrite the file without the field, as an older version wrote it.
+    let [, bytes] = Gio.File.new_for_path(CLOCK_FILE).load_contents(null);
+    let data = JSON.parse(new TextDecoder().decode(bytes));
+    for (let rec of data.sessions ?? data)
+        delete rec.project;
+    Gio.File.new_for_path(CLOCK_FILE).replace_contents(
+        new TextEncoder().encode(JSON.stringify(data)), null, false,
+        Gio.FileCreateFlags.NONE, null);
+    let reopened = new ClockStore(new FakeSettings());
+    assertEqual(reopened.sessionById(s.id).project, null);
+    reopened.destroy();
+});

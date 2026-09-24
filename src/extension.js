@@ -10,7 +10,7 @@ import { PopupWidget } from './popupWidget.js';
 import { UsageTracker } from './usageTracker.js';
 import { UsageStore, todayKeyFor } from './usageStore.js';
 import { ClockStore } from './clockStore.js';
-import { isKnownClient, pausedClient } from './clients.js';
+import { isKnownClient, lastProject, pausedClient } from './clients.js';
 import { migratePanelSetting, panelClockState } from './panelMode.js';
 import { nudgeDue, awayMomentMs, awayNudgeDue } from './nudge.js';
 import { IntervalLog } from './intervalLog.js';
@@ -182,10 +182,17 @@ export default class ScreenTimeExtension extends Extension {
                 // Whatever started the running session - a client row, the
                 // card, the shortcut, DBus - it is the one pausing leaves
                 // resumable. Without this a DBus start after Stop would
-                // look stopped, not paused, once paused.
+                // look stopped, not paused, once paused. The running
+                // session's project is what resume restarts, so it is kept
+                // in step here too.
                 let running = this._clock?.running;
-                if (running && this._settings?.get_string('last-client') !== running.client)
-                    this._settings.set_string('last-client', running.client);
+                if (running) {
+                    if (this._settings?.get_string('last-client') !== running.client)
+                        this._settings.set_string('last-client', running.client);
+                    let project = running.project ?? '';
+                    if (this._settings?.get_string('last-project') !== project)
+                        this._settings.set_string('last-project', project);
+                }
                 this._syncPanelClock();
                 this._notifier?.syncSaveHealth();
             };
@@ -296,12 +303,13 @@ export default class ScreenTimeExtension extends Extension {
     // frequently minimal, which is the same trap the zellij lookup hits.
     // Never wait() on this subprocess: it would block the compositor.
     // `day` (a dayKey, or null) scrolls the Timesheet to that day; `clients`
-    // opens it on the Clients page. An already-open Timesheet gets both too,
-    // since the new process hands its command line over and exits (see
-    // timesheet.js).
-    _openTimesheet({ day = null, clients = false } = {}) {
+    // opens it on the Clients page; `note` (a session id, or null) is the
+    // popup's note button, which expands that session and focuses its Note
+    // field. An already-open Timesheet gets all of these too, since the new
+    // process hands its command line over and exits (see timesheet.js).
+    _openTimesheet({ day = null, clients = false, note = null } = {}) {
         try {
-            let argv = timesheetArgv(this.path, { day, clients });
+            let argv = timesheetArgv(this.path, { day, clients, note });
             // A plain Gio.Subprocess carries no activation token, so Mutter's
             // focus-stealing prevention maps the window without raising it.
             // Launching through a GAppInfo puts an xdg-activation token on
@@ -328,7 +336,7 @@ export default class ScreenTimeExtension extends Extension {
                 let last = this._settings.get_string('last-client');
                 if (!isKnownClient(this._settings, last))
                     return;
-                this._clock.start(last);
+                this._clock.start(last, Date.now(), { project: lastProject(this._settings, last) });
             }
         } catch (e) {
             // start()/stop() throw only when the system clock is out of

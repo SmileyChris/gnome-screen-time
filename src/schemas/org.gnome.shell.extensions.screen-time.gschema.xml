@@ -68,6 +68,21 @@
       <summary>Most recently clocked client</summary>
       <description>Internal, not user-facing. What the popup's clock control and the keyboard shortcut start when no client is named.</description>
     </key>
+    <key name="last-project" type="s">
+      <default>""</default>
+      <summary>Most recently clocked project</summary>
+      <description>Internal, not user-facing. The project of last-client that resume and the keyboard shortcut restart; "" means General.</description>
+    </key>
+    <key name="projects" type="a{sas}">
+      <default>{}</default>
+      <summary>Projects per client</summary>
+      <description>Maps a client name to its project names, in display order. A session with no project is the client's General time.</description>
+    </key>
+    <key name="inactive-projects" type="a{sas}">
+      <default>{}</default>
+      <summary>Inactive projects per client</summary>
+      <description>The projects turned inactive: left out of the popup but still exported.</description>
+    </key>
     <key name="toggle-clock" type="as">
       <default><![CDATA[[]]]></default>
       <summary>Toggle the clock</summary>

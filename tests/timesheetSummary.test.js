@@ -13,29 +13,29 @@ function session(client, startH, endH, over = {}) {
     };
 }
 
-test('dayHeading: one client shows its hours and no total', () => {
-    assertEqual(dayHeading([session('ACME', 9, 11.5)]), 'ACME 2.50 h');
+test('dayHeading: one client\'s hours go inline, nothing below', () => {
+    assertEqual(dayHeading([session('ACME', 9, 11.5)]), { inline: 'ACME 2.50 h', below: '' });
 });
 
-test('dayHeading: several clients in first-clocked order, then the total', () => {
+test('dayHeading: several clients put the total inline, each client below', () => {
     let heading = dayHeading([
         session('ACME', 10, 12.5),
         session('BETA', 9, 10),
         session('BETA', 13, 13.5),
     ]);
-    assertEqual(heading, 'BETA 1.50 h · ACME 2.50 h · Total 4.00 h');
+    assertEqual(heading, { inline: 'Total 4.00 h', below: 'BETA 1.50 h · ACME 2.50 h' });
 });
 
 test('dayHeading: an hours override replaces the actual time', () => {
-    assertEqual(dayHeading([session('ACME', 9, 11, { billedHours: 1.25 })]), 'ACME 1.25 h');
+    assertEqual(dayHeading([session('ACME', 9, 11, { billedHours: 1.25 })]), { inline: 'ACME 1.25 h', below: '' });
 });
 
 test('dayHeading: an override of 0 counts as 0, not as unset', () => {
-    assertEqual(dayHeading([session('ACME', 9, 11, { billedHours: 0 })]), 'ACME 0.00 h');
+    assertEqual(dayHeading([session('ACME', 9, 11, { billedHours: 0 })]), { inline: 'ACME 0.00 h', below: '' });
 });
 
 test('dayHeading: a running session counts up to now', () => {
-    assertEqual(dayHeading([session('ACME', 9, null)], 10.75 * H), 'ACME 1.75 h');
+    assertEqual(dayHeading([session('ACME', 9, null)], 10.75 * H), { inline: 'ACME 1.75 h', below: '' });
 });
 
 // Each client rounds once, like its export row. The total adds the rounded
@@ -47,9 +47,9 @@ test('dayHeading: each client rounds once and the total adds the rounded figures
     let third = 1206000;
     let at = (client, i) => ({ client, startMs: i * H, endMs: i * H + third, billedHours: null });
     let heading = dayHeading([at('ACME', 0), at('ACME', 1), at('ACME', 2), at('BETA', 3)]);
-    assertEqual(heading, 'ACME 1.01 h · BETA 0.34 h · Total 1.35 h');
+    assertEqual(heading, { inline: 'Total 1.35 h', below: 'ACME 1.01 h · BETA 0.34 h' });
 });
 
 test('dayHeading: no sessions gives an empty heading', () => {
-    assertEqual(dayHeading([]), '');
+    assertEqual(dayHeading([]), { inline: '', below: '' });
 });

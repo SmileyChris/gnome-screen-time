@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import System from 'system';
 import { TimesheetWindow } from './timesheetWindow.js';
-import { dayFromArgs, pageFromArgs } from './timesheetArgs.js';
+import { dayFromArgs, pageFromArgs, noteFromArgs } from './timesheetArgs.js';
 
 // Only the launcher runs anything, so process-identity setup belongs here,
 // not in timesheetWindow.js: that module must only define things, since
@@ -46,6 +46,12 @@ app.connect('command-line', (_app, commandLine) => {
         timesheet = new TimesheetWindow(app, settings);
     timesheet.showDay(dayFromArgs(commandLine.get_arguments()));
     timesheet.showPage(pageFromArgs(commandLine.get_arguments()));
+    // The popup's note button (see popupWidget.js's clock card): expands
+    // that session and focuses its Note field. An unknown or malformed id
+    // (noteFromArgs already rejected it) is simply not there.
+    let noteId = noteFromArgs(commandLine.get_arguments());
+    if (noteId)
+        timesheet.showNote(noteId);
     timesheet.window.present();
     // Releases the launching process now. Without this it waits until gjs
     // garbage-collects commandLine, which can be seconds or never.

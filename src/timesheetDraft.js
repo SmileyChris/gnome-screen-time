@@ -28,15 +28,3 @@ export class HoursBinding {
         this._draft.hours = this._adjustment.value;
     }
 }
-
-// What Save sends: only the fields the person actually edited, so a note-only
-// save never pins billedHours and an hours-only save never sends the seeded,
-// unedited note. An empty object means there is nothing to save.
-export function saveFields(draft, hoursValue, noteText) {
-    let fields = {};
-    if (draft.hoursDirty)
-        fields.billedHours = Math.round(hoursValue * 100) / 100;
-    if (draft.noteDirty)
-        fields.description = noteText.trim();
-    return fields;
-}

@@ -1,5 +1,6 @@
 import { test, assertEqual } from './harness.js';
-import { dayArg, dayFromArgs, CLIENTS_ARG, pageFromArgs, timesheetArgv } from '../src/timesheetArgs.js';
+import { dayArg, dayFromArgs, CLIENTS_ARG, pageFromArgs, timesheetArgv,
+    noteArg, noteFromArgs } from '../src/timesheetArgs.js';
 
 test('timesheetArgs: dayArg builds the --day argument', () => {
     assertEqual(dayArg('2026-09-12'), '--day=2026-09-12');
@@ -53,4 +54,38 @@ test('timesheetArgs: timesheetArgv appends --clients when asked', () => {
 test('timesheetArgs: timesheetArgv can combine day and clients', () => {
     assertEqual(timesheetArgv('/ext/dir', { day: '2026-09-12', clients: true }).join(' '),
         '/usr/bin/gjs -m /ext/dir/timesheet.js --day=2026-09-12 --clients');
+});
+
+const A_UUID = '123e4567-e89b-12d3-a456-426614174000';
+
+test('timesheetArgs: noteArg builds the --note argument', () => {
+    assertEqual(noteArg(A_UUID), `--note=${A_UUID}`);
+});
+
+test('timesheetArgs: noteFromArgs round-trips noteArg', () => {
+    assertEqual(noteFromArgs([noteArg(A_UUID)]), A_UUID);
+    assertEqual(noteFromArgs(['--day=2026-09-12', noteArg(A_UUID)]), A_UUID);
+});
+
+test('timesheetArgs: no --note argument gives null', () => {
+    assertEqual(noteFromArgs(['timesheet.js']), null);
+    assertEqual(noteFromArgs([]), null);
+});
+
+test('timesheetArgs: a malformed or injection-looking id gives null', () => {
+    for (let bad of ['--note=', '--note=not-a-uuid', '--note=123',
+        '--note=g23e4567-e89b-12d3-a456-426614174000',   // right length, non-hex char
+        '--note=$(rm -rf ~)', '--note=; rm -rf ~', '--note=../../etc/passwd',
+        `--note=${A_UUID}x`])
+        assertEqual(noteFromArgs([bad]), null, bad);
+});
+
+test('timesheetArgs: timesheetArgv appends --note when given one', () => {
+    assertEqual(timesheetArgv('/ext/dir', { note: A_UUID }).join(' '),
+        `/usr/bin/gjs -m /ext/dir/timesheet.js --note=${A_UUID}`);
+});
+
+test('timesheetArgs: timesheetArgv can combine day and note', () => {
+    assertEqual(timesheetArgv('/ext/dir', { day: '2026-09-12', note: A_UUID }).join(' '),
+        `/usr/bin/gjs -m /ext/dir/timesheet.js --day=2026-09-12 --note=${A_UUID}`);
 });
