@@ -190,6 +190,11 @@ export class TimesheetWindow {
             '{ border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }');
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+        // The extension's own icons (the panel's stopwatch), found beside
+        // this module, so the running session can show the same one.
+        Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(
+            GLib.build_filenamev([
+                GLib.path_get_dirname(GLib.filename_from_uri(import.meta.url)[0]), 'icons']));
 
         this.window = new Adw.ApplicationWindow({
             application: app,
@@ -695,6 +700,14 @@ export class TimesheetWindow {
             label: sessionTimes(session),
             css_classes: ['dim-label', 'numeric'],
         });
+        // The session still on the clock gets the panel's stopwatch before
+        // its times, so it stands out from the finished ones.
+        if (session.endMs === null) {
+            row.add_suffix(new Gtk.Image({
+                icon_name: 'screen-time-tracking-symbolic',
+                css_classes: ['dim-label'],
+            }));
+        }
         row.add_suffix(times);
 
         // Bookkeeping for _tickLive(): only a still-running session's
