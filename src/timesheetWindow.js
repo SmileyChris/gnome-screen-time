@@ -701,14 +701,18 @@ export class TimesheetWindow {
             css_classes: ['dim-label', 'numeric'],
         });
         // The session still on the clock gets the panel's stopwatch before
-        // its times, so it stands out from the finished ones.
+        // its times, so it stands out from the finished ones. One suffix
+        // holding both: the row does not keep separate suffixes in the
+        // order they were added.
+        let suffix = new Gtk.Box({ spacing: 6 });
         if (session.endMs === null) {
-            row.add_suffix(new Gtk.Image({
+            suffix.append(new Gtk.Image({
                 icon_name: 'screen-time-tracking-symbolic',
                 css_classes: ['dim-label'],
             }));
         }
-        row.add_suffix(times);
+        suffix.append(times);
+        row.add_suffix(suffix);
 
         // Bookkeeping for _tickLive(): only a still-running session's
         // times go stale between refreshes (nothing mutates the clock just
