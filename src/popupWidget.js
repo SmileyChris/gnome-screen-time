@@ -553,12 +553,16 @@ export class PopupWidget {
         // to survive an extra "which session was that" once the Timesheet's
         // open. Its label says whether there is a note yet, so an empty
         // one invites a first note rather than looking like the way to
-        // read one.
+        // read one - except beside a "×2" count, where there is only room
+        // for the pen.
+        let sessionCount = client !== null && this._clock
+            ? this._clock.sessionsForDay(this._date).filter(s => s.client === client).length
+            : 0;
         let noteButton = noteSessionId !== null
             ? cardButton('document-edit-symbolic', 'Note', () => {
                 this._menu.close();
                 this._onOpenTimesheet?.({ note: noteSessionId });
-            }, noteSession.description.trim() ? 'Edit' : 'Add')
+            }, sessionCount >= 2 ? null : noteSession.description.trim() ? 'Edit' : 'Add')
             : null;
 
         let figureRow = new St.BoxLayout({
@@ -572,9 +576,6 @@ export class PopupWidget {
         // squeezes the count instead.
         figureLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
         figureRow.add_child(figureLabel);
-        let sessionCount = client !== null && this._clock
-            ? this._clock.sessionsForDay(this._date).filter(s => s.client === client).length
-            : 0;
         if (sessionCount >= 2) {
             let count = new St.Label({
                 text: `×${sessionCount}`,
