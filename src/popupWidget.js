@@ -543,9 +543,9 @@ export class PopupWidget {
 
         // The figure is the client's time today, while the panel shows the
         // running session's own time. Once the client has two or more
-        // sessions today the two differ, so a small count after the figure
+        // sessions today the two differ, so a small "×2" after the figure
         // says why. Capped like the title, so it can never widen the card:
-        // the count ellipsizes before the figure gives up any room.
+        // the figure never shrinks, and the count is what gives way.
         // A small note button at the card's bottom-right, on the figure's
         // line so the card keeps its size. It closes the popup and opens
         // the Timesheet with this session already expanded and its Note
@@ -553,27 +553,32 @@ export class PopupWidget {
         // to survive an extra "which session was that" once the Timesheet's
         // open. Its label says whether there is a note yet, so an empty
         // one invites a first note rather than looking like the way to
-        // read one.
+        // read one - except beside a "×2" count, where there is only room
+        // for the pen.
+        let sessionCount = client !== null && this._clock
+            ? this._clock.sessionsForDay(this._date).filter(s => s.client === client).length
+            : 0;
         let noteButton = noteSessionId !== null
             ? cardButton('document-edit-symbolic', 'Note', () => {
                 this._menu.close();
                 this._onOpenTimesheet?.({ note: noteSessionId });
-            }, noteSession.description.trim() ? 'Edit' : 'Add')
+            }, sessionCount >= 2 ? null : noteSession.description.trim() ? 'Edit' : 'Add')
             : null;
 
         let figureRow = new St.BoxLayout({
-            style: `spacing: 5px; max-width: ${Math.round(ROW_W / 2) - 36}px;`,
+            style: `spacing: 4px; max-width: ${Math.round(ROW_W / 2) - 36}px;`,
         });
-        figureRow.add_child(new St.Label({
+        let figureLabel = new St.Label({
             text: figure > 0 ? formatTime(figure) : '0m',
             style: FIGURE_STYLE,
-        }));
-        let sessionCount = client !== null && this._clock
-            ? this._clock.sessionsForDay(this._date).filter(s => s.client === client).length
-            : 0;
+        });
+        // Unellipsized, its minimum width is its full text, so the row
+        // squeezes the count instead.
+        figureLabel.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+        figureRow.add_child(figureLabel);
         if (sessionCount >= 2) {
             let count = new St.Label({
-                text: `${sessionCount} sessions`,
+                text: `×${sessionCount}`,
                 opacity: DIM_OPACITY,
                 y_align: Clutter.ActorAlign.END,
                 style: `font-size: 10px; padding-bottom: 3px; color: ${CARD_FG};`,
