@@ -32,6 +32,8 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._pauseBadge = new St.Icon({
             icon_name: 'media-playback-pause-symbolic',
             icon_size: 10,
+            // Faded, so it reads as secondary to the icon it sits on.
+            opacity: DIM_OPACITY,
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.END,
