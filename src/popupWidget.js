@@ -695,9 +695,14 @@ export class PopupWidget {
             icon_size: 14,
             y_align: Clutter.ActorAlign.CENTER,
         }));
-        let when = kind === 'manual' ? 'resumed'
-            : kind === 'tomorrow' ? 'tomorrow'
-                : DateUtils.formatTime(GLib.DateTime.new_from_unix_local(until), {timeOnly: true});
+        let when = kind === 'manual' ? 'resumed' : kind === 'tomorrow' ? 'tomorrow' : null;
+        if (when === null) {
+            // A pause can run up to a day, so an end on a later calendar
+            // day says so rather than passing for a time later today.
+            let end = GLib.DateTime.new_from_unix_local(until);
+            let sameDay = end.format('%F') === GLib.DateTime.new_from_unix_local(now).format('%F');
+            when = (sameDay ? '' : 'tomorrow ') + DateUtils.formatTime(end, {timeOnly: true});
+        }
         // Close to the end, how long is left reads quicker than the clock
         // time. Rounded up, so the last minute says 1m rather than 0m.
         if (kind === 'until' && until - now < SOON_SECONDS)
