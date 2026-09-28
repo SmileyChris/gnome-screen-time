@@ -124,10 +124,8 @@ export const PanelIndicator = class extends PanelMenu.Button {
             : this._trackingPaused ? PAUSE_BADGE_ICON
                 : this._clock.paused ? TRACKING_ICON : null;
         this._pauseBadge.visible = badge !== null;
-        if (badge) {
+        if (badge)
             this._pauseBadge.gicon = badge;
-            this._pauseBadge.opacity = badge === PAUSE_BADGE_ICON ? 255 : DIM_OPACITY;
-        }
         this._icon.opacity = running && this._clock.away ? DIM_OPACITY : 255;
 
         let text = panelLabelText(this._mode, this._totalSeconds, this._clock);
