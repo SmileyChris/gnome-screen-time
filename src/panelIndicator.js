@@ -19,7 +19,12 @@ export const PanelIndicator = class extends PanelMenu.Button {
         });
         // The pause badge sits over the icon's bottom-right corner, so the
         // icon still says what the indicator is while it says "paused".
-        let iconStack = new St.Widget({layout_manager: new Clutter.BinLayout()});
+        // Centred, so the stack is the icon's height rather than the panel's
+        // and the badge lands on the icon's corner.
+        let iconStack = new St.Widget({
+            layout_manager: new Clutter.BinLayout(),
+            y_align: Clutter.ActorAlign.CENTER,
+        });
         iconStack.add_child(new St.Icon({
             icon_name: 'alarm-symbolic',
             style_class: 'system-status-icon',

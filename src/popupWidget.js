@@ -2,7 +2,7 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-import * as Util from 'resource:///org/gnome/shell/misc/util.js';
+import * as DateUtils from 'resource:///org/gnome/shell/misc/dateUtils.js';
 import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
@@ -263,7 +263,7 @@ export class PopupWidget {
         }));
         let when = kind === 'manual' ? 'resumed'
             : kind === 'tomorrow' ? 'tomorrow'
-                : Util.formatTime(GLib.DateTime.new_from_unix_local(until), {timeOnly: true});
+                : DateUtils.formatTime(GLib.DateTime.new_from_unix_local(until), {timeOnly: true});
         top.add_child(new St.Label({
             text: `Screen Time paused until ${when}`,
             x_expand: true,
