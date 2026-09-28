@@ -45,6 +45,9 @@ const USAGE_TIERS = [
     {limit: Infinity, from: '#ffbdb6', to: '#f66151', hoverFrom: '#ffd6d1', hoverTo: '#ffbdb6'},
 ];
 
+// Grey while tracking is paused, whatever the usage: not counting.
+const PAUSED_TIER = {from: '#deddda', to: '#c0bfbc', hoverFrom: '#f6f5f4', hoverTo: '#deddda'};
+
 function tierFor(seconds) {
     return USAGE_TIERS.find(t => seconds < t.limit) ?? USAGE_TIERS.at(-1);
 }
@@ -366,9 +369,16 @@ export class PopupWidget {
             style: 'margin: 4px 10px 2px 10px;',
         });
 
+        // Both cards reflect the day on screen; a pause, like the clock's
+        // controls, is about now, so only today's cards show it.
+        let isToday = this._date === todayKeyFor(this._settings);
+        let trackingPaused = isToday && pauseKind(this._settings.get_int64('paused-until'),
+            nowSeconds(), this._settings.get_int('day-start-hour')) !== null;
+
         // Left card: screen time. A tap shows or hides the app rows; a long
-        // press flips what the bars and percentages compare against.
-        let tier = tierFor(total);
+        // press flips what the bars and percentages compare against. Grey
+        // while tracking is paused.
+        let tier = trackingPaused ? PAUSED_TIER : tierFor(total);
         let screen = new St.BoxLayout({
             vertical: true,
             x_expand: true,
@@ -386,7 +396,7 @@ export class PopupWidget {
         }));
         // Pause and resume, on today only: a pause is about now, not about
         // the day being looked at.
-        if (this._date === todayKeyFor(this._settings))
+        if (isToday)
             screenTitle.add_child(this._pauseButton());
         screen.add_child(screenTitle);
         screen.add_child(new St.Label({
@@ -428,7 +438,6 @@ export class PopupWidget {
         // panelMode.js). Tapping the card itself pauses or resumes, like
         // the pause and play buttons; on a total above zero, it opens the
         // Timesheet at that day.
-        let isToday = this._date === todayKeyFor(this._settings);
         let running = isToday ? (this._clock?.running ?? null) : null;
         // See clients.js's pausedClient for exactly when that is.
         let resumable = isToday && this._clock ? pausedClient(this._settings, running) : null;
