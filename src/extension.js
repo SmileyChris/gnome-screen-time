@@ -21,6 +21,7 @@ import { BrowserSource } from './browserSource.js';
 import { DbusService } from './dbusService.js';
 import { ClockDBus } from './clockDBus.js';
 import { timesheetArgv } from './timesheetArgs.js';
+import { isPaused } from './pause.js';
 
 // GNOME Shell caches an extension's ES modules for the life of the Shell
 // process, so module-scoped state survives a disable()/enable() cycle (a
@@ -173,8 +174,10 @@ export default class ScreenTimeExtension extends Extension {
                 'changed::panel-time', () => this._syncPanelLabel(),
                 'changed::last-client', () => this._syncPanelClock(),
                 'changed::clients', () => this._syncPanelClock(),
+                'changed::paused-until', () => this._syncPaused(),
                 this);
             this._syncPanelLabel();
+            this._syncPaused();
 
             // Must be set before ClockDBus is constructed below - see the
             // comment there.
@@ -394,6 +397,12 @@ export default class ScreenTimeExtension extends Extension {
             this._clock, todayKeyFor(this._settings), Date.now(),
             this._tracker?.away ?? false,
             pausedClient(this._settings, this._clock.running)));
+    }
+
+    // The tracker clears a lapsed pause, so this only has to mirror the key.
+    _syncPaused() {
+        this._indicator?.setPaused(isPaused(
+            this._settings.get_int64('paused-until'), Math.floor(Date.now() / 1000)));
     }
 
     // Must be safe to call at any point enable() might have thrown (see the

@@ -19,6 +19,7 @@ const ICONS_DIR = GLib.build_filenamev([
 const IDLE_ICON = new Gio.ThemedIcon({ name: 'alarm-symbolic' });
 const TRACKING_ICON = Gio.FileIcon.new(Gio.File.new_for_path(
     GLib.build_filenamev([ICONS_DIR, 'screen-time-tracking-symbolic.svg'])));
+const PAUSED_ICON = new Gio.ThemedIcon({ name: 'media-playback-pause-symbolic' });
 
 export const PanelIndicator = class extends PanelMenu.Button {
     static {
@@ -53,6 +54,7 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._totalSeconds = 0;
         this._mode = 'screen';
         this._clock = { running: false, away: false, paused: false, client: '', seconds: 0 };
+        this._trackingPaused = false;
         this._updateLabel();
     }
 
@@ -70,6 +72,12 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._updateLabel();
     }
 
+    // Screen Time's own pause (paused-until), not the clock's paused client.
+    setPaused(paused) {
+        this._trackingPaused = paused;
+        this._updateLabel();
+    }
+
     setClock(state) {
         this._clock = state;
         this._updateLabel();
@@ -78,16 +86,20 @@ export const PanelIndicator = class extends PanelMenu.Button {
     // The icon turns into a stopwatch while the clock runs, in every mode,
     // `none` included: whether the clock is running is the one thing the
     // panel must answer without a click. Dimmed means away but still
-    // counting. A paused clock's total is faded.
+    // counting. A paused clock's total is faded. Otherwise a tracking pause
+    // swaps in a pause glyph and fades the total, so a pause left on cannot
+    // pass for normal tracking; the clock's state outranks it.
     _updateLabel() {
         let running = this._clock.running;
-        this._icon.gicon = running ? TRACKING_ICON : IDLE_ICON;
+        let trackingPaused = this._trackingPaused && !running;
+        this._icon.gicon = running ? TRACKING_ICON : trackingPaused ? PAUSED_ICON : IDLE_ICON;
         this._icon.opacity = running && this._clock.away ? DIM_OPACITY : 255;
 
         let text = panelLabelText(this._mode, this._totalSeconds, this._clock);
         this._label.visible = text.length > 0;
         if (this._label.visible)
             this._label.text = text;
-        this._label.opacity = panelLabelDimmed(this._mode, this._clock) ? DIM_OPACITY : 255;
+        this._label.opacity = panelLabelDimmed(this._mode, this._clock) || trackingPaused
+            ? DIM_OPACITY : 255;
     }
 };

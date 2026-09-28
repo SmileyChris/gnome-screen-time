@@ -39,6 +39,7 @@ const FILES = [
     './rules.test.js',
     './framing.test.js',
     './windowClass.test.js',
+    './pause.test.js',
 ];
 
 // Removes the scratch directory and everything UsageStore wrote inside it,
