@@ -16,6 +16,7 @@ The panel shows today's total at a glance. Click it for a per-app breakdown, and
 - **Per-app breakdown:** top five apps with usage bars and percentages; everything else folds into a collapsible "Other N apps" row, so the numbers always add up to the total.
 - **Day-by-day history:** `‹ Today ›` steps back one day at a time.
 - **App time limits:** set a daily limit per app and get a desktop notification once you cross it.
+- **Pause:** stop counting from the total card, until you resume, for a set time, or until tomorrow; the panel icon carries a pause badge meanwhile.
 - **7-day chart** in preferences, with configurable retention and a one-click purge.
 - **Presence-aware:** time on the lock screen, while the screen is blanked, or while suspended is never counted.
 - **Idle detection:** counting stops after 10 minutes without keyboard or mouse input, unless something is inhibiting idle the way a playing video does.
@@ -77,6 +78,7 @@ Time is attributed to the app owning the **focused window**, updated on every fo
 
 - A video playing in an **unfocused** window is not counted: this measures interaction, not playback.
 - Tracking **stops** when the screen blanks, when the session locks, and across suspend. It resumes from the moment you come back, so the gap belongs to nobody.
+- **Pausing** from the total card stops counting until you resume. +30m and +1h set an end instead (pressed again, they add up, to at most a day), and Tomorrow runs to the next day boundary. A pause survives locking and suspend, and ends on time even if it lapsed while the machine was asleep.
 - After **10 minutes without keyboard or mouse input** (Idle Timeout in preferences, 0 to disable) counting stops even if the screen stays on, unless something is inhibiting idle the way a playing video does, and resumes on the next input. Time up to the timeout is still counted, so a walk-away costs at most one timeout of over-count.
 - Apps without a `.desktop` file (typically AppImages) are identified by their window class, so their history accumulates instead of splitting across launches.
 - Inside a **terminal running zellij**, time is further broken down by the focused pane's command and working directory (for example `claude` in `gnome-screen-time`), read from `zellij action dump-layout`. Only the session name is read from the window title; the pane title is never stored. Terminals not running zellij, and terminals not on the built-in list, are tracked as a single app. The zellij binary must be on GNOME Shell's PATH (a systemd user session often lacks ~/.cargo/bin and ~/.local/bin); if it is not found, terminals are tracked as a single app. Zellij sets the window title only when the focused pane's title changes, so a terminal that has just attached to an idle session stays at the app level until something in that pane retitles it.

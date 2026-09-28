@@ -128,6 +128,13 @@ export class PopupWidget {
         this._openId = this._menu.connect('open-state-changed', (m, open) => {
             if (open) this._refresh();
         });
+        // A pause can end, or be changed, while the popup is open: the
+        // tracker clears one that lapses. Follow it rather than show a
+        // pause that no longer holds.
+        this._pauseId = this._settings.connect('changed::paused-until', () => {
+            if (this._menu.isOpen)
+                this._build();
+        });
     }
 
     // The shortcut and the panel can change the clock without the popup being
@@ -679,8 +686,8 @@ export class PopupWidget {
         let until = choice === null ? 0 : pauseUntil(choice, nowSeconds(),
             this._settings.get_int('day-start-hour'),
             this._settings.get_int64('paused-until'));
+        // The write rebuilds the popup through the changed handler.
         this._settings.set_int64('paused-until', until);
-        this._build();
     }
 
     // Only while paused: what the pause is and how to change it. +30m and
@@ -952,6 +959,10 @@ export class PopupWidget {
         if (this._openId) {
             this._menu.disconnect(this._openId);
             this._openId = null;
+        }
+        if (this._pauseId) {
+            this._settings.disconnect(this._pauseId);
+            this._pauseId = null;
         }
         this._clockSection?.destroy();
         this._clockSection = null;
