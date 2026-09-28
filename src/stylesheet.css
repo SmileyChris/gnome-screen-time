@@ -38,7 +38,7 @@
     background-color: rgba(128, 128, 128, 0.4);
 }
 
-/* The clock card's pause, play and stop buttons. The card is always a light
+/* The cards' pause, play and stop buttons. The card is always a light
  * gradient, so these darken rather than using the theme-neutral gray above. */
 .screen-time-card-button {
     padding: 3px;
