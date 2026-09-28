@@ -4,6 +4,7 @@ import GObject from 'gi://GObject';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { formatTime } from './formatTime.js';
+import { DIM_OPACITY } from './usageBar.js';
 
 export const PanelIndicator = class extends PanelMenu.Button {
     static {
@@ -16,10 +17,11 @@ export const PanelIndicator = class extends PanelMenu.Button {
         const hbox = new St.BoxLayout({
             style_class: 'panel-status-menu-box',
         });
-        hbox.add_child(new St.Icon({
+        this._icon = new St.Icon({
             icon_name: 'alarm-symbolic',
             style_class: 'system-status-icon',
-        }));
+        });
+        hbox.add_child(this._icon);
         this._label = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
@@ -40,6 +42,13 @@ export const PanelIndicator = class extends PanelMenu.Button {
     setTotal(seconds) {
         this._totalSeconds = seconds;
         this._updateLabel();
+    }
+
+    // A pause swaps the icon rather than just fading it, so a pause left on
+    // cannot pass for normal tracking.
+    setPaused(paused) {
+        this._icon.icon_name = paused ? 'media-playback-pause-symbolic' : 'alarm-symbolic';
+        this._label.opacity = paused ? DIM_OPACITY : 255;
     }
 
     setShowTotal(show) {

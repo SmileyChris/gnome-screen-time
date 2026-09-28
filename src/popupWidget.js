@@ -2,12 +2,22 @@ import St from 'gi://St';
 import GLib from 'gi://GLib';
 import Clutter from 'gi://Clutter';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import * as Util from 'resource:///org/gnome/shell/misc/util.js';
 import { formatTime } from './formatTime.js';
 import { todayKey, todayKeyFor, dateKey } from './usageStore.js';
 import { AppTimerSection } from './appTimerSection.js';
 import { ROW_W, BAR_W, DIM_OPACITY, makeUsageBar } from './usageBar.js';
+import { pauseUntil, pauseKind } from './pause.js';
 
 const MAX_VISIBLE = 5;
+const PAUSE_CHOICES = [
+    ['30m', '30m'], ['1h', '1h'], ['tomorrow', 'Tomorrow'], ['manual', 'Manual'],
+];
+const ACTIVE_STYLE = 'background-color: rgba(128,128,128,0.25);';
+
+function nowSeconds() {
+    return Math.floor(Date.now() / 1000);
+}
 const MIN_ROW_SECONDS = 60;
 const COLORS = ['#3584e4', '#33d17a', '#e5a50a', '#9141ac', '#ed333b'];
 
@@ -92,6 +102,7 @@ export class PopupWidget {
 
         this._addDateNav();
         this._addTotalCard(total);
+        this._addPauseBlock();
         this._addSeparator();
 
         if (all.length === 0) {
@@ -219,6 +230,94 @@ export class PopupWidget {
         this._menu.addMenuItem(item);
     }
 
+    _setPause(choice) {
+        // Remembered only so the chip stays lit: 30m and 1h cannot be told
+        // apart from the stored expiry alone.
+        this._pauseChoice = choice;
+        let until = choice === null ? 0 : pauseUntil(choice, nowSeconds(),
+            this._settings.get_int('day-start-hour'));
+        this._settings.set_int64('paused-until', until);
+        this._build();
+    }
+
+    // Only while paused: what the pause is, a way out, and the lengths it
+    // can be switched to. Each chip counts from now.
+    _addPauseBlock() {
+        let until = this._settings.get_int64('paused-until');
+        let kind = pauseKind(until, nowSeconds(), this._settings.get_int('day-start-hour'));
+        if (!kind)
+            return;
+        if (kind !== 'until')
+            this._pauseChoice = kind;
+
+        let item = new PopupMenu.PopupBaseMenuItem({activate: false});
+        item.track_hover = false;
+        item.style = 'padding: 0;';
+        let col = new St.BoxLayout({vertical: true, x_expand: true, style: 'padding: 6px 10px 0 10px;'});
+
+        let top = new St.BoxLayout();
+        top.add_child(new St.Icon({
+            icon_name: 'media-playback-pause-symbolic',
+            icon_size: 14,
+            y_align: Clutter.ActorAlign.CENTER,
+        }));
+        let when = kind === 'manual' ? 'resumed'
+            : kind === 'tomorrow' ? 'tomorrow'
+                : Util.formatTime(GLib.DateTime.new_from_unix_local(until), {timeOnly: true});
+        top.add_child(new St.Label({
+            text: `Screen Time paused until ${when}`,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 12px; padding-left: 6px;',
+        }));
+        let resume = new St.Button({
+            label: 'Resume',
+            style_class: 'screen-time-nav-button',
+            style: 'font-size: 11px;',
+            can_focus: true,
+        });
+        resume.connect('clicked', () => this._setPause(null));
+        top.add_child(resume);
+        col.add_child(top);
+
+        let chips = new St.BoxLayout({style: 'spacing: 4px; padding-top: 4px;'});
+        for (let [choice, label] of PAUSE_CHOICES) {
+            let chip = new St.Button({
+                label,
+                style_class: 'screen-time-nav-button',
+                style: 'font-size: 11px;' + (choice === this._pauseChoice ? ACTIVE_STYLE : ''),
+                can_focus: true,
+            });
+            chip.connect('clicked', () => this._setPause(choice));
+            chips.add_child(chip);
+        }
+        col.add_child(chips);
+
+        item.add_child(col);
+        this._menu.addMenuItem(item);
+    }
+
+    // Beside App Timer: lit while paused, and a second way to resume.
+    _pauseToggleButton() {
+        let paused = pauseKind(this._settings.get_int64('paused-until'), nowSeconds(),
+            this._settings.get_int('day-start-hour')) !== null;
+        let box = new St.BoxLayout();
+        box.add_child(new St.Icon({icon_name: 'media-playback-pause-symbolic', icon_size: 14}));
+        box.add_child(new St.Label({
+            text: 'Pause',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-size: 11px; padding-left: 4px;',
+        }));
+        let btn = new St.Button({
+            child: box,
+            style_class: 'screen-time-nav-button',
+            can_focus: true,
+            style: paused ? ACTIVE_STYLE : '',
+        });
+        btn.connect('clicked', () => this._setPause(paused ? null : 'manual'));
+        return btn;
+    }
+
     _addAppRow(app, total, color) {
         let item = new PopupMenu.PopupBaseMenuItem({activate: false});
         item.track_hover = false;
@@ -317,6 +416,7 @@ export class PopupWidget {
 
         let row = new St.BoxLayout({x_expand: true, style: 'padding: 0 8px 2px 8px;'});
         row.add_child(this._timerSection.createToggleButton(() => this._build()));
+        row.add_child(this._pauseToggleButton());
         row.add_child(new St.BoxLayout({x_expand: true}));   // pushes the settings button right
 
         let btn = new St.Button({
