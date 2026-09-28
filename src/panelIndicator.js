@@ -19,7 +19,6 @@ const ICONS_DIR = GLib.build_filenamev([
 const IDLE_ICON = new Gio.ThemedIcon({ name: 'alarm-symbolic' });
 const TRACKING_ICON = Gio.FileIcon.new(Gio.File.new_for_path(
     GLib.build_filenamev([ICONS_DIR, 'screen-time-tracking-symbolic.svg'])));
-const PAUSED_ICON = new Gio.ThemedIcon({ name: 'media-playback-pause-symbolic' });
 
 export const PanelIndicator = class extends PanelMenu.Button {
     static {
@@ -32,11 +31,25 @@ export const PanelIndicator = class extends PanelMenu.Button {
         const hbox = new St.BoxLayout({
             style_class: 'panel-status-menu-box',
         });
+        // The pause badge sits over the icon's bottom-right corner, so the
+        // icon still says what the indicator is while it says "paused".
+        let iconStack = new St.Widget({layout_manager: new Clutter.BinLayout()});
         this._icon = new St.Icon({
             gicon: IDLE_ICON,
             style_class: 'system-status-icon',
         });
-        hbox.add_child(this._icon);
+        iconStack.add_child(this._icon);
+        this._pauseBadge = new St.Icon({
+            icon_name: 'media-playback-pause-symbolic',
+            icon_size: 8,
+            x_expand: true,
+            y_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.END,
+            visible: false,
+        });
+        iconStack.add_child(this._pauseBadge);
+        hbox.add_child(iconStack);
         this._label = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
@@ -86,13 +99,14 @@ export const PanelIndicator = class extends PanelMenu.Button {
     // The icon turns into a stopwatch while the clock runs, in every mode,
     // `none` included: whether the clock is running is the one thing the
     // panel must answer without a click. Dimmed means away but still
-    // counting. A paused clock's total is faded. Otherwise a tracking pause
-    // swaps in a pause glyph and fades the total, so a pause left on cannot
-    // pass for normal tracking; the clock's state outranks it.
+    // counting. A paused clock's total is faded. A tracking pause badges
+    // whichever icon shows, and fades the screen total unless the running
+    // clock's time is what the label shows.
     _updateLabel() {
         let running = this._clock.running;
         let trackingPaused = this._trackingPaused && !running;
-        this._icon.gicon = running ? TRACKING_ICON : trackingPaused ? PAUSED_ICON : IDLE_ICON;
+        this._icon.gicon = running ? TRACKING_ICON : IDLE_ICON;
+        this._pauseBadge.visible = this._trackingPaused;
         this._icon.opacity = running && this._clock.away ? DIM_OPACITY : 255;
 
         let text = panelLabelText(this._mode, this._totalSeconds, this._clock);
