@@ -33,6 +33,9 @@ const USAGE_TIERS = [
     {limit: Infinity, from: '#ffbdb6', to: '#f66151', hoverFrom: '#ffd6d1', hoverTo: '#ffbdb6'},
 ];
 
+// Grey while tracking is paused, whatever the usage: not counting.
+const PAUSED_TIER = {from: '#deddda', to: '#c0bfbc', hoverFrom: '#f6f5f4', hoverTo: '#deddda'};
+
 function tierFor(seconds) {
     return USAGE_TIERS.find(t => seconds < t.limit) ?? USAGE_TIERS.at(-1);
 }
@@ -201,7 +204,11 @@ export class PopupWidget {
         item.track_hover = false;
         item.style = 'padding: 0;';
 
-        let tier = tierFor(total);
+        // A pause is about now, so only today's card shows it.
+        let isToday = this._date === todayKeyFor(this._settings);
+        let paused = isToday && pauseKind(this._settings.get_int64('paused-until'),
+            nowSeconds(), this._settings.get_int('day-start-hour')) !== null;
+        let tier = paused ? PAUSED_TIER : tierFor(total);
         let card = new St.BoxLayout({
             x_expand: true,
             reactive: true,
@@ -223,7 +230,7 @@ export class PopupWidget {
         }));
         // Pause and resume, on today only: a pause is about now, not about
         // the day being looked at.
-        if (this._date === todayKeyFor(this._settings))
+        if (isToday)
             card.add_child(this._pauseButton());
 
         // The gradient is per-usage and therefore inline, which outranks any
