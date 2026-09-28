@@ -105,17 +105,27 @@ export const PanelIndicator = class extends PanelMenu.Button {
     // The icon turns into a stopwatch while the clock runs, in every mode,
     // `none` included: whether the clock is running is the one thing the
     // panel must answer without a click. Dimmed means away but still
-    // counting. A paused clock's total is faded. A tracking pause badges
-    // the icon and fades the screen total. Over a running stopwatch a pause
-    // badge would read as the clock being paused, so there the badge is a
-    // dimmed Screen Time clock instead: screen time is sitting out.
+    // counting. A paused clock's total is faded. A tracking pause fades the
+    // screen total.
+    //
+    // The corner badge shows what is on hold beside what the main icon
+    // shows: over a running stopwatch, a faded Screen Time clock for a
+    // tracking pause (a pause badge there would read as the clock paused);
+    // over the alarm clock, the pause badge for a tracking pause, or else a
+    // faded stopwatch for a paused client. One corner, so a tracking pause
+    // wins over a paused client, whose name the label already fades.
     _updateLabel() {
         let running = this._clock.running;
         let trackingPaused = this._trackingPaused && !running;
         this._icon.gicon = running ? TRACKING_ICON : IDLE_ICON;
-        this._pauseBadge.visible = this._trackingPaused;
-        this._pauseBadge.gicon = running ? IDLE_ICON : PAUSE_BADGE_ICON;
-        this._pauseBadge.opacity = running ? DIM_OPACITY : 255;
+        let badge = running ? (this._trackingPaused ? IDLE_ICON : null)
+            : this._trackingPaused ? PAUSE_BADGE_ICON
+                : this._clock.paused ? TRACKING_ICON : null;
+        this._pauseBadge.visible = badge !== null;
+        if (badge) {
+            this._pauseBadge.gicon = badge;
+            this._pauseBadge.opacity = badge === PAUSE_BADGE_ICON ? 255 : DIM_OPACITY;
+        }
         this._icon.opacity = running && this._clock.away ? DIM_OPACITY : 255;
 
         let text = panelLabelText(this._mode, this._totalSeconds, this._clock);
