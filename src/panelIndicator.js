@@ -47,7 +47,7 @@ export const PanelIndicator = class extends PanelMenu.Button {
         iconStack.add_child(this._icon);
         this._pauseBadge = new St.Icon({
             gicon: PAUSE_BADGE_ICON,
-            icon_size: 8,
+            icon_size: 10,
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.END,
