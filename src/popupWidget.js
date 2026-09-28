@@ -219,6 +219,10 @@ export class PopupWidget {
             y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 17px; font-weight: 800; color: ' + CARD_FG + ';',
         }));
+        // Pause and resume, on today only: a pause is about now, not about
+        // the day being looked at.
+        if (this._date === todayKeyFor(this._settings))
+            card.add_child(this._pauseButton());
 
         // The gradient is per-usage and therefore inline, which outranks any
         // stylesheet :hover rule, so the hover swap is done here instead.
@@ -228,6 +232,27 @@ export class PopupWidget {
 
         item.add_child(card);
         this._menu.addMenuItem(item);
+    }
+
+    // Pause while tracking, play while paused. Pausing starts open-ended;
+    // the chips under the card then set a length.
+    _pauseButton() {
+        let paused = pauseKind(this._settings.get_int64('paused-until'), nowSeconds(),
+            this._settings.get_int('day-start-hour')) !== null;
+        let btn = new St.Button({
+            child: new St.Icon({
+                icon_name: paused ? 'media-playback-start-symbolic' : 'media-playback-pause-symbolic',
+                icon_size: 12,
+                style: `color: ${CARD_FG};`,
+            }),
+            can_focus: true,
+            accessible_name: paused ? 'Resume tracking' : 'Pause tracking',
+            y_align: Clutter.ActorAlign.CENTER,
+            style_class: 'screen-time-card-button',
+            style: 'margin-left: 6px;',
+        });
+        btn.connect('clicked', () => this._setPause(paused ? null : 'manual'));
+        return btn;
     }
 
     _setPause(choice) {
@@ -240,8 +265,8 @@ export class PopupWidget {
         this._build();
     }
 
-    // Only while paused: what the pause is, a way out, and the lengths it
-    // can be switched to. Each chip counts from now.
+    // Only while paused: what the pause is and the lengths it can be
+    // switched to, each counting from now. The card's play button resumes.
     _addPauseBlock() {
         let until = this._settings.get_int64('paused-until');
         let kind = pauseKind(until, nowSeconds(), this._settings.get_int('day-start-hour'));
@@ -270,14 +295,6 @@ export class PopupWidget {
             y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 12px; padding-left: 6px;',
         }));
-        let resume = new St.Button({
-            label: 'Resume',
-            style_class: 'screen-time-nav-button',
-            style: 'font-size: 11px;',
-            can_focus: true,
-        });
-        resume.connect('clicked', () => this._setPause(null));
-        top.add_child(resume);
         col.add_child(top);
 
         let chips = new St.BoxLayout({style: 'spacing: 4px; padding-top: 4px;'});
@@ -295,27 +312,6 @@ export class PopupWidget {
 
         item.add_child(col);
         this._menu.addMenuItem(item);
-    }
-
-    // Beside App Timer: lit while paused, and a second way to resume.
-    _pauseToggleButton() {
-        let paused = pauseKind(this._settings.get_int64('paused-until'), nowSeconds(),
-            this._settings.get_int('day-start-hour')) !== null;
-        let box = new St.BoxLayout();
-        box.add_child(new St.Icon({icon_name: 'media-playback-pause-symbolic', icon_size: 14}));
-        box.add_child(new St.Label({
-            text: 'Pause',
-            y_align: Clutter.ActorAlign.CENTER,
-            style: 'font-size: 11px; padding-left: 4px;',
-        }));
-        let btn = new St.Button({
-            child: box,
-            style_class: 'screen-time-nav-button',
-            can_focus: true,
-            style: paused ? ACTIVE_STYLE : '',
-        });
-        btn.connect('clicked', () => this._setPause(paused ? null : 'manual'));
-        return btn;
     }
 
     _addAppRow(app, total, color) {
@@ -416,7 +412,6 @@ export class PopupWidget {
 
         let row = new St.BoxLayout({x_expand: true, style: 'padding: 0 8px 2px 8px;'});
         row.add_child(this._timerSection.createToggleButton(() => this._build()));
-        row.add_child(this._pauseToggleButton());
         row.add_child(new St.BoxLayout({x_expand: true}));   // pushes the settings button right
 
         let btn = new St.Button({
