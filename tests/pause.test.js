@@ -52,3 +52,11 @@ test('pauseUntil: a timed choice counts from now off manual, tomorrow or a lapse
     assertEqual(pauseUntil('1h', NOW, 0, NOW - 5), NOW + 3600);
     assertEqual(pauseUntil('1h', NOW, 0, 0), NOW + 3600);
 });
+
+test('pauseUntil: timed choices stop at a day from now, however often pressed', () => {
+    let until = 0;
+    for (let i = 0; i < 30; i++)
+        until = pauseUntil('1h', NOW, 0, until);
+    assertEqual(until, NOW + 24 * 3600);
+    assertEqual(pauseUntil('30m', NOW, 0, until), NOW + 24 * 3600, 'already at the cap');
+});

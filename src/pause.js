@@ -7,6 +7,8 @@ import { dateKey } from './usageStore.js';
 export const MANUAL = -1;
 
 const LENGTHS = { '30m': 30 * 60, '1h': 3600 };
+// Timed chips add up, so they stop here; longer than a day is what Manual is for.
+const MAX_TIMED = 24 * 3600;
 
 export function isPaused(until, now) {
     return until === MANUAL || until > now;
@@ -28,7 +30,7 @@ export function pauseUntil(choice, now, startHour, current = 0) {
     if (choice === 'tomorrow')
         return nextDayStart(now, startHour);
     let from = pauseKind(current, now, startHour) === 'until' ? current : now;
-    return from + LENGTHS[choice];
+    return Math.min(from + LENGTHS[choice], now + MAX_TIMED);
 }
 
 // How to describe a stored value: null when not paused, 'manual',
