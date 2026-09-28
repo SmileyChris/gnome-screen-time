@@ -38,3 +38,17 @@ test('pauseKind: reads the choice back from the stored value', () => {
     assertEqual(pauseKind(pauseUntil('tomorrow', NOW, 4), NOW, 4), 'tomorrow');
     assertEqual(pauseKind(NOW + 3600, NOW, 4), 'until');
 });
+
+test('pauseUntil: a timed choice adds to a timed pause still running', () => {
+    let until = pauseUntil('30m', NOW, 0);
+    assertEqual(pauseUntil('1h', NOW, 0, until), until + 3600);
+    assertEqual(pauseUntil('30m', NOW + 60, 0, until), until + 30 * 60,
+        'from the old expiry, not from now');
+});
+
+test('pauseUntil: a timed choice counts from now off manual, tomorrow or a lapsed pause', () => {
+    assertEqual(pauseUntil('1h', NOW, 0, MANUAL), NOW + 3600);
+    assertEqual(pauseUntil('1h', NOW, 4, pauseUntil('tomorrow', NOW, 4)), NOW + 3600);
+    assertEqual(pauseUntil('1h', NOW, 0, NOW - 5), NOW + 3600);
+    assertEqual(pauseUntil('1h', NOW, 0, 0), NOW + 3600);
+});

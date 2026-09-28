@@ -20,12 +20,15 @@ function nextDayStart(now, startHour) {
 }
 
 // The `paused-until` value for a chip: '30m', '1h', 'tomorrow' or 'manual'.
-export function pauseUntil(choice, now, startHour) {
+// A timed chip adds to a timed pause still running (`current`), so pressing
+// it again extends; off manual, tomorrow or no pause, it counts from now.
+export function pauseUntil(choice, now, startHour, current = 0) {
     if (choice === 'manual')
         return MANUAL;
     if (choice === 'tomorrow')
         return nextDayStart(now, startHour);
-    return now + LENGTHS[choice];
+    let from = pauseKind(current, now, startHour) === 'until' ? current : now;
+    return from + LENGTHS[choice];
 }
 
 // How to describe a stored value: null when not paused, 'manual',

@@ -11,8 +11,10 @@ import { pauseUntil, pauseKind } from './pause.js';
 
 const MAX_VISIBLE = 5;
 const PAUSE_CHOICES = [
-    ['30m', '30m'], ['1h', '1h'], ['tomorrow', 'Tomorrow'], ['manual', 'Manual'],
+    ['30m', '+30m'], ['1h', '+1h'], ['tomorrow', 'Tomorrow'], ['manual', 'Manual'],
 ];
+// Under this much left, the paused line adds how long remains.
+const SOON_SECONDS = 30 * 60;
 const ACTIVE_STYLE = 'background-color: rgba(128,128,128,0.25);';
 
 function nowSeconds() {
@@ -256,24 +258,22 @@ export class PopupWidget {
     }
 
     _setPause(choice) {
-        // Remembered only so the chip stays lit: 30m and 1h cannot be told
-        // apart from the stored expiry alone.
-        this._pauseChoice = choice;
         let until = choice === null ? 0 : pauseUntil(choice, nowSeconds(),
-            this._settings.get_int('day-start-hour'));
+            this._settings.get_int('day-start-hour'),
+            this._settings.get_int64('paused-until'));
         this._settings.set_int64('paused-until', until);
         this._build();
     }
 
-    // Only while paused: what the pause is and the lengths it can be
-    // switched to, each counting from now. The card's play button resumes.
+    // Only while paused: what the pause is and how to change it. +30m and
+    // +1h add to a timed pause, so they are never lit; Tomorrow and Manual
+    // are states, lit while they hold. The card's play button resumes.
     _addPauseBlock() {
+        let now = nowSeconds();
         let until = this._settings.get_int64('paused-until');
-        let kind = pauseKind(until, nowSeconds(), this._settings.get_int('day-start-hour'));
+        let kind = pauseKind(until, now, this._settings.get_int('day-start-hour'));
         if (!kind)
             return;
-        if (kind !== 'until')
-            this._pauseChoice = kind;
 
         let item = new PopupMenu.PopupBaseMenuItem({activate: false});
         item.track_hover = false;
@@ -289,6 +289,10 @@ export class PopupWidget {
         let when = kind === 'manual' ? 'resumed'
             : kind === 'tomorrow' ? 'tomorrow'
                 : DateUtils.formatTime(GLib.DateTime.new_from_unix_local(until), {timeOnly: true});
+        // Close to the end, how long is left reads quicker than the clock
+        // time. Rounded up, so the last minute says 1m rather than 0m.
+        if (kind === 'until' && until - now < SOON_SECONDS)
+            when += ` (in ${formatTime(Math.ceil((until - now) / 60) * 60)})`;
         top.add_child(new St.Label({
             text: `Screen Time paused until ${when}`,
             x_expand: true,
@@ -302,7 +306,7 @@ export class PopupWidget {
             let chip = new St.Button({
                 label,
                 style_class: 'screen-time-nav-button',
-                style: 'font-size: 11px;' + (choice === this._pauseChoice ? ACTIVE_STYLE : ''),
+                style: 'font-size: 11px;' + (choice === kind ? ACTIVE_STYLE : ''),
                 can_focus: true,
             });
             chip.connect('clicked', () => this._setPause(choice));
