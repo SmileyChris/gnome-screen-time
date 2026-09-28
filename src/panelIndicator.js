@@ -17,6 +17,7 @@ const ICONS_DIR = GLib.build_filenamev([
     GLib.path_get_dirname(GLib.filename_from_uri(import.meta.url)[0]), 'icons',
 ]);
 const IDLE_ICON = new Gio.ThemedIcon({ name: 'alarm-symbolic' });
+const PAUSE_BADGE_ICON = new Gio.ThemedIcon({ name: 'media-playback-pause-symbolic' });
 const TRACKING_ICON = Gio.FileIcon.new(Gio.File.new_for_path(
     GLib.build_filenamev([ICONS_DIR, 'screen-time-tracking-symbolic.svg'])));
 
@@ -45,7 +46,7 @@ export const PanelIndicator = class extends PanelMenu.Button {
         });
         iconStack.add_child(this._icon);
         this._pauseBadge = new St.Icon({
-            icon_name: 'media-playback-pause-symbolic',
+            gicon: PAUSE_BADGE_ICON,
             icon_size: 8,
             x_expand: true,
             y_expand: true,
@@ -105,13 +106,16 @@ export const PanelIndicator = class extends PanelMenu.Button {
     // `none` included: whether the clock is running is the one thing the
     // panel must answer without a click. Dimmed means away but still
     // counting. A paused clock's total is faded. A tracking pause badges
-    // whichever icon shows, and fades the screen total unless the running
-    // clock's time is what the label shows.
+    // the icon and fades the screen total. Over a running stopwatch a pause
+    // badge would read as the clock being paused, so there the badge is a
+    // dimmed Screen Time clock instead: screen time is sitting out.
     _updateLabel() {
         let running = this._clock.running;
         let trackingPaused = this._trackingPaused && !running;
         this._icon.gicon = running ? TRACKING_ICON : IDLE_ICON;
         this._pauseBadge.visible = this._trackingPaused;
+        this._pauseBadge.gicon = running ? IDLE_ICON : PAUSE_BADGE_ICON;
+        this._pauseBadge.opacity = running ? DIM_OPACITY : 255;
         this._icon.opacity = running && this._clock.away ? DIM_OPACITY : 255;
 
         let text = panelLabelText(this._mode, this._totalSeconds, this._clock);
