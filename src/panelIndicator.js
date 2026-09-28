@@ -31,7 +31,7 @@ export const PanelIndicator = class extends PanelMenu.Button {
         }));
         this._pauseBadge = new St.Icon({
             icon_name: 'media-playback-pause-symbolic',
-            icon_size: 8,
+            icon_size: 10,
             x_expand: true,
             y_expand: true,
             x_align: Clutter.ActorAlign.END,
