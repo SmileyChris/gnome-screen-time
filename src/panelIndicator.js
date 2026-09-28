@@ -17,11 +17,24 @@ export const PanelIndicator = class extends PanelMenu.Button {
         const hbox = new St.BoxLayout({
             style_class: 'panel-status-menu-box',
         });
-        this._icon = new St.Icon({
+        // The pause badge sits over the icon's bottom-right corner, so the
+        // icon still says what the indicator is while it says "paused".
+        let iconStack = new St.Widget({layout_manager: new Clutter.BinLayout()});
+        iconStack.add_child(new St.Icon({
             icon_name: 'alarm-symbolic',
             style_class: 'system-status-icon',
+        }));
+        this._pauseBadge = new St.Icon({
+            icon_name: 'media-playback-pause-symbolic',
+            icon_size: 8,
+            x_expand: true,
+            y_expand: true,
+            x_align: Clutter.ActorAlign.END,
+            y_align: Clutter.ActorAlign.END,
+            visible: false,
         });
-        hbox.add_child(this._icon);
+        iconStack.add_child(this._pauseBadge);
+        hbox.add_child(iconStack);
         this._label = new St.Label({
             text: '',
             y_align: Clutter.ActorAlign.CENTER,
@@ -44,10 +57,10 @@ export const PanelIndicator = class extends PanelMenu.Button {
         this._updateLabel();
     }
 
-    // A pause swaps the icon rather than just fading it, so a pause left on
-    // cannot pass for normal tracking.
+    // A pause badges the icon rather than just fading the total, so a pause
+    // left on cannot pass for normal tracking.
     setPaused(paused) {
-        this._icon.icon_name = paused ? 'media-playback-pause-symbolic' : 'alarm-symbolic';
+        this._pauseBadge.visible = paused;
         this._label.opacity = paused ? DIM_OPACITY : 255;
     }
 
