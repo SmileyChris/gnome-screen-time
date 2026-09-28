@@ -71,6 +71,7 @@ export class UsageTracker {
         // Cancels the inhibit query still in flight when the extension stops.
         this._cancellable = new Gio.Cancellable();
         this._away = this._computeAway();
+        this._reportedAway = this._away;
 
         this._focusId = global.display.connect(
             'notify::focus-window',
@@ -112,9 +113,12 @@ export class UsageTracker {
 
     // Presence, for anything that must show "away but still on the clock".
     // Not derivable from the interval stream: _flush credits nothing while
-    // away, so no interval is emitted for the gap.
+    // away, so no interval is emitted for the gap. A pause stops tracking
+    // like being away does, but says nothing about the desk: while paused,
+    // only idle or the shield count here, so the clock is not dimmed or
+    // nudged just because screen time is paused.
     get away() {
-        return this._away;
+        return this._paused ? this._presenceAway() : this._away;
     }
 
     // (Re)installs the idle watch for the configured timeout. A timeout of 0
@@ -250,9 +254,23 @@ export class UsageTracker {
         this._onPresenceChanged();
     }
 
-    _computeAway() {
-        return this._idle || this._paused ||
+    _presenceAway() {
+        return this._idle ||
             !!(this._shield && (this._shield.active || this._shield.locked));
+    }
+
+    _computeAway() {
+        return this._paused || this._presenceAway();
+    }
+
+    // onAway follows the `away` getter, not tracking: going idle while
+    // paused changes nothing tracked but is still news to the clock.
+    _reportAway() {
+        let away = this.away;
+        if (away === this._reportedAway)
+            return;
+        this._reportedAway = away;
+        this.onAway?.(away);
     }
 
     _currentApp() {
@@ -378,13 +396,14 @@ export class UsageTracker {
         // already null, so it only resets the clock for the app picked up next.
         this._flush(now);
         this._setCurrent(away ? null : this._currentApp());
-        this.onAway?.(away);
+        this._reportAway();
     }
 
     _onPresenceChanged() {
         let away = this._computeAway();
         if (away !== this._away)
             this._setAway(away);
+        this._reportAway();
     }
 
     _onPrepareForSleep(aboutToSuspend) {
