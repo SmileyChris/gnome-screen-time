@@ -267,8 +267,13 @@ test('load: zero-second rows written by older versions are swept out', async () 
 
 // The day boundary. dateKey() takes the hour and subtracts it before reading
 // the date, so DST is GLib's problem: NZ's spring-forward day is 23 hours long
-// and its fall-back day 25, and neither should move a night's work.
+// and its fall-back day 25, and neither should move a night's work. The DST
+// cases pin their zone, since the machine running the tests may have no DST.
 const at = (y, m, d, h, min) => GLib.DateTime.new_local(y, m, d, h, min, 0);
+const NZ = GLib.TimeZone.new_identifier('Pacific/Auckland');
+const nz = (y, m, d, h, min) => GLib.DateTime.new(NZ, y, m, d, h, min, 0);
+const hoursLong = (y, m, d) =>
+    nz(y, m, d + 1, 0, 0).difference(nz(y, m, d, 0, 0)) / GLib.TIME_SPAN_HOUR;
 
 test('dateKey: hour 0 is the plain calendar day', () => {
     assertEqual(dateKey(at(2026, 9, 24, 1, 30), 0), '2026-09-24');
@@ -287,13 +292,15 @@ test('dateKey: the boundary hour starts the new day', () => {
 });
 
 test('dateKey: a 23-hour day (DST spring forward) keeps its night', () => {
-    assertEqual(dateKey(at(2026, 9, 27, 1, 30), 4), '2026-09-26');
-    assertEqual(dateKey(at(2026, 9, 27, 5, 0), 4), '2026-09-27');
+    assertEqual(hoursLong(2026, 9, 27), 23, 'the zone really springs forward');
+    assertEqual(dateKey(nz(2026, 9, 27, 1, 30), 4), '2026-09-26');
+    assertEqual(dateKey(nz(2026, 9, 27, 5, 0), 4), '2026-09-27');
 });
 
 test('dateKey: a 25-hour day (DST fall back) keeps its night', () => {
-    assertEqual(dateKey(at(2026, 4, 5, 1, 30), 4), '2026-04-04');
-    assertEqual(dateKey(at(2026, 4, 5, 6, 0), 4), '2026-04-05');
+    assertEqual(hoursLong(2026, 4, 5), 25, 'the zone really falls back');
+    assertEqual(dateKey(nz(2026, 4, 5, 1, 30), 4), '2026-04-04');
+    assertEqual(dateKey(nz(2026, 4, 5, 6, 0), 4), '2026-04-05');
 });
 
 test('todayKeyFor: reads the boundary out of settings', () => {
