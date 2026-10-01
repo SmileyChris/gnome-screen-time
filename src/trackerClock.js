@@ -24,3 +24,14 @@ export function advanceClock(lastTime, now, maxSecs) {
         lastTime: secs < elapsed ? now : lastTime + credited * 1000,
     };
 }
+
+// How far a flush may credit: up to the last keyboard or mouse input
+// (`idleMs` before `now`), so a stretch with no input is held back until
+// input shows it was used, and dropped if the user turns out to be away.
+// While idle is inhibited (a video playing) nobody is expected to type, so
+// up to now. Never behind `lastTime`: a focus change credits up to now, and
+// a later cut must not walk back over time already credited.
+export function creditUntil(lastTime, now, idleMs, idleInhibited) {
+    let until = idleInhibited ? now : now - Math.max(0, idleMs);
+    return Math.max(lastTime, until);
+}

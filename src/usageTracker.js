@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
-import { advanceClock } from './trackerClock.js';
+import { advanceClock, creditUntil } from './trackerClock.js';
 
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
@@ -35,6 +35,13 @@ export class UsageTracker {
         // Cancels the inhibit query still in flight when the extension stops.
         this._cancellable = new Gio.Cancellable();
         this._away = this._computeAway();
+        // Called after every periodic flush, so a panel showing
+        // pendingSeconds keeps moving while nothing is being credited.
+        this.onTick = null;
+        // Whether something (a video) inhibits idle right now, followed from
+        // the session manager's InhibitedActions; see _creditUntil().
+        this._idleInhibited = false;
+        this._watchInhibitors();
 
         this._focusId = global.display.connect(
             'notify::focus-window',
@@ -200,7 +207,11 @@ export class UsageTracker {
 
     // Credits elapsed time (since _lastTime) to whatever app is currently
     // tracked and advances the clock; advanceClock() carries the rounding.
-    _flush(now) {
+    //
+    // `until` is how far to credit, by default up to the last input (see
+    // _creditUntil()); what lies past it stays on the clock, uncredited,
+    // until a later flush shows it was used, or going away drops it.
+    _flush(now, until = this._creditUntil(now)) {
         if (!this._appId) {
             // Nothing tracked (away, or a transient window with no stable
             // id): the stretch belongs to nobody, and any fraction carried
@@ -209,7 +220,7 @@ export class UsageTracker {
             return;
         }
         let { credited, lastTime } =
-            advanceClock(this._lastTime, now, this._getMaxInterval());
+            advanceClock(this._lastTime, until, this._getMaxInterval());
         if (credited > 0)
             this._store.addTime(this._appId, this._appName, credited);
         this._lastTime = lastTime;
@@ -220,8 +231,11 @@ export class UsageTracker {
     _setAway(away) {
         let now = Date.now();
         this._away = away;
-        // Going away, this banks the tracked time; coming back, _appId is
-        // already null, so it only resets the clock for the app picked up next.
+        // Going away, this banks the tracked time up to the last input, and
+        // what came after it (the idle timeout running out, the screen
+        // blanking) is dropped by the next flush, with no app to credit;
+        // coming back, _appId is already null, so it only resets the clock
+        // for the app picked up next.
         this._flush(now);
         let app = away ? null : this._currentApp();
         this._appId = app?.id ?? null;
@@ -246,8 +260,11 @@ export class UsageTracker {
         if (this._away)
             return;
 
+        // Up to now, not to the last input: a focus change with no input
+        // (a window closing itself) is rare, and whose time the gap was
+        // would be guesswork.
         let now = Date.now();
-        this._flush(now);
+        this._flush(now, now);
 
         let app = this._currentApp();
         this._appId = app?.id ?? null;
@@ -257,7 +274,53 @@ export class UsageTracker {
     _onFlushTick() {
         if (!this._away && this._appId)
             this._flush(Date.now());
+        this.onTick?.();
         return GLib.SOURCE_CONTINUE;
+    }
+
+    // How far a flush credits: the last keyboard or mouse input, unless idle
+    // is inhibited (nobody types through a film) or idle detection is off
+    // (the user asked for time to count regardless).
+    _creditUntil(now) {
+        let holdBack = !this._idleInhibited && this._settings.get_int('idle-timeout') > 0;
+        return creditUntil(this._lastTime, now, this._idleMonitor.get_idletime(), !holdBack);
+    }
+
+    // Seconds on the clock not yet credited: time since the last input,
+    // held back until input shows it was used (see _creditUntil()). For a
+    // display that should keep moving meanwhile; never written anywhere.
+    get pendingSeconds() {
+        if (this._away || !this._appId)
+            return 0;
+        return Math.min(Math.max(0, (Date.now() - this._lastTime) / 1000), this._getMaxInterval());
+    }
+
+    // Credits everything up to the last input now, e.g. as the popup opens:
+    // the click that opened it was input, so nothing is held back.
+    flushNow() {
+        if (!this._away && this._appId)
+            this._flush(Date.now());
+    }
+
+    _watchInhibitors() {
+        Gio.DBusProxy.new_for_bus(
+            Gio.BusType.SESSION, Gio.DBusProxyFlags.DO_NOT_AUTO_START, null,
+            'org.gnome.SessionManager', '/org/gnome/SessionManager',
+            'org.gnome.SessionManager', this._cancellable,
+            (_o, res) => {
+                try {
+                    this._sessionManager = Gio.DBusProxy.new_for_bus_finish(res);
+                } catch (e) {
+                    // No session manager (or stopped first): never inhibited.
+                    return;
+                }
+                let sync = () => {
+                    let actions = this._sessionManager.get_cached_property('InhibitedActions');
+                    this._idleInhibited = !!(actions && (actions.unpack() & IDLE_INHIBIT_FLAG));
+                };
+                sync();
+                this._inhibitorsId = this._sessionManager.connect('g-properties-changed', sync);
+            });
     }
 
     destroy() {
@@ -289,6 +352,10 @@ export class UsageTracker {
         // the cancelled inhibit query bail out instead of marking us idle.
         this._clearIdleWatches();
         this._cancellable.cancel();
+        if (this._inhibitorsId) {
+            this._sessionManager.disconnect(this._inhibitorsId);
+            this._inhibitorsId = null;
+        }
         this._flush(Date.now());
     }
 }

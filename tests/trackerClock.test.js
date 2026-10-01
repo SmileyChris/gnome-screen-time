@@ -1,5 +1,5 @@
 import { test, assertEqual } from './harness.js';
-import { advanceClock } from '../src/trackerClock.js';
+import { advanceClock, creditUntil } from '../src/trackerClock.js';
 
 const MAX = 60;
 
@@ -55,4 +55,28 @@ test('advanceClock: a clock jumping back resynchronises', () => {
     let r = advanceClock(10000, 5000, MAX);
     assertEqual(r.credited, 0);
     assertEqual(r.lastTime, 5000);
+});
+
+test('creditUntil: up to the last input, so time with no input is held back', () => {
+    // Last credited at 0; now 300s on; last input 120s ago.
+    assertEqual(creditUntil(0, 300000, 120000, false), 180000);
+    assertEqual(creditUntil(0, 300000, 0, false), 300000, 'input just now: all of it');
+});
+
+test('creditUntil: while idle is inhibited (a video), up to now', () => {
+    assertEqual(creditUntil(0, 300000, 120000, true), 300000);
+});
+
+test('creditUntil: never behind what was already credited', () => {
+    // A focus change credited up to now (500s); the last input is older.
+    assertEqual(creditUntil(500000, 520000, 60000, false), 500000);
+});
+
+test('creditUntil: a held-back stretch is credited once input resumes', () => {
+    let lastTime = 0;
+    let r = advanceClock(lastTime, creditUntil(lastTime, 300000, 120000, false), 600);
+    assertEqual([r.credited, r.lastTime], [180, 180000]);
+    // Input at 290s; the tick at 330s credits everything up to it.
+    r = advanceClock(r.lastTime, creditUntil(r.lastTime, 330000, 40000, false), 600);
+    assertEqual([r.credited, r.lastTime], [110, 290000]);
 });
