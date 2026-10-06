@@ -4,6 +4,7 @@ import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
 import { isPaused } from './pause.js';
+import { advanceClock } from './trackerClock.js';
 
 // Periodic flush so a long unbroken session still updates the total/limit
 // checks without a focus change. Matches UsageStore's autosave cadence.
@@ -233,31 +234,20 @@ export class UsageTracker {
     }
 
     // Credits elapsed time (since _lastTime) to whatever app is currently
-    // tracked and advances the clock. The store keeps whole seconds, so the
-    // fraction it rounds away is left on the clock instead of being dropped:
-    // short flushes (quick focus changes) then neither lose time nor inflate
-    // it.
+    // tracked and advances the clock; advanceClock() carries the rounding.
     _flush(now) {
-        let elapsed = (now - this._lastTime) / 1000;
-        let secs = Math.min(elapsed, this._getMaxInterval());
         if (!this._appId) {
+            // Nothing tracked (away, or a transient window with no stable
+            // id): the stretch belongs to nobody, and any fraction carried
+            // from the previous app goes with it.
             this._lastTime = now;
             return;
         }
-        if (secs <= 0) {
-            // In debt from a previous round-up: leave the clock so the debt
-            // is repaid by the next flush. A whole negative second cannot
-            // come from rounding, so that is a clock jump: resynchronise.
-            if (secs <= -1)
-                this._lastTime = now;
-            return;
-        }
-        let credited = Math.round(secs);
+        let { credited, lastTime } =
+            advanceClock(this._lastTime, now, this._getMaxInterval());
         if (credited > 0)
             this._store.addTime(this._appId, this._appName, credited);
-        // When max-interval capped the stretch, the excess is discarded on
-        // purpose (that is what the setting is for), so no residual.
-        this._lastTime = secs < elapsed ? now : now - (secs - credited) * 1000;
+        this._lastTime = lastTime;
     }
 
     // Going away banks the time so far and stops tracking; coming back re-reads
